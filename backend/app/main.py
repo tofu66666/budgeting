@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, File, Form, UploadFile, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, File, Form, Header, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -11,6 +11,7 @@ from app.config import get_settings
 from app.database import get_supabase_client
 from app.models import BudgetUser
 from app.schemas import (
+    AppSettingsPayload,
     DashboardSummary,
     LoginRequest,
     RecurringExpenseInput,
@@ -25,6 +26,8 @@ from app.services import (
     delete_recurring_expense,
     ensure_seed_user,
     get_dashboard_summary,
+    get_gemini_key,
+    save_gemini_key,
     save_recurring_expense,
     update_manual_spend,
 )
@@ -75,19 +78,51 @@ def login(payload: LoginRequest) -> TokenResponse:
     return TokenResponse(access_token=token)
 
 
+@api_router.get("/settings")
+def get_settings_status(user: BudgetUser = Depends(get_current_user)) -> dict:
+    key = get_gemini_key()
+    has_key = bool(key and len(key) > 5)
+    masked = f"{key[:4]}...{key[-4:]}" if has_key and len(key) >= 8 else ("Configured" if has_key else "")
+    return {
+        "has_gemini_api_key": has_key,
+        "gemini_api_key_masked": masked,
+    }
+
+
+@api_router.post("/settings")
+def update_settings(
+    payload: AppSettingsPayload,
+    user: BudgetUser = Depends(get_current_user),
+) -> dict:
+    if payload.gemini_api_key:
+        save_gemini_key(payload.gemini_api_key.strip())
+    key = get_gemini_key()
+    has_key = bool(key and len(key) > 5)
+    masked = f"{key[:4]}...{key[-4:]}" if has_key and len(key) >= 8 else ("Configured" if has_key else "")
+    return {
+        "status": "success",
+        "has_gemini_api_key": has_key,
+        "gemini_api_key_masked": masked,
+    }
+
+
 @api_router.post("/receipt/analyze")
 async def analyze_receipt(
     file: UploadFile = File(...),
     month: str | None = Form(default=None),
     system_prompt: str | None = Form(default=None),
+    api_key: str | None = Form(default=None),
+    x_gemini_api_key: str | None = Header(default=None, alias="X-Gemini-API-Key"),
     user: BudgetUser = Depends(get_current_user),
 ) -> dict:
     image_data = await file.read()
+    override_key = (api_key or x_gemini_api_key or "").strip() or None
     payload = analyze_receipt_image(
         image_data=image_data,
         mime_type=file.content_type or "image/jpeg",
         month=month,
         system_prompt=system_prompt,
+        override_api_key=override_key,
     )
     return payload
 

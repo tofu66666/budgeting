@@ -37,28 +37,129 @@ def _extract_json_object(raw_text: str) -> dict[str, Any]:
     return payload
 
 
-DEFAULT_RECEIPT_SYSTEM_PROMPT = (
-    "You are an expert financial receipt analysis assistant.\n"
-    "Carefully inspect the receipt image and extract transaction data with high precision.\n\n"
-    "Instructions:\n"
-    "1. Date: Find the transaction/purchase date printed on the receipt and format it strictly as ISO 'YYYY-MM-DD' (e.g. '2026-11-15'). If the year is 2 digits, infer the 4-digit year. If no date is visible or legible on the receipt, output null.\n"
-    "2. Merchant: Extract the store, restaurant, vendor, or business name (e.g., 'Target', 'Trader Joe\\'s', 'Shell Gas', 'Costco'). If unreadable, use 'Unknown Merchant'.\n"
-    "3. Line Items: Extract each individual purchased item with its exact name/description, sensible budget category (such as 'Groceries', 'Dining & Food', 'Utilities', 'Transportation', 'Housing', 'Healthcare', 'Entertainment', 'Shopping', 'Personal Care', 'Other'), and numeric price/amount.\n"
-    "4. Adjustments & Discounts: Capture coupons, discounts, returns, or bottle deposits as separate line items with negative amounts (e.g. -1.50).\n"
-    "5. Categories: Return a dictionary mapping each budget category name to its subtotal amount.\n"
-    "6. Total Spend: Extract or calculate the grand total paid on the receipt.\n"
-    "7. Notes: Provide a concise 1-sentence summary of the transaction (e.g., 'Groceries at Trader Joe\\'s').\n\n"
-    "Return ONLY a valid JSON object without markdown fences, explanation, or extra keys.\n"
-    "Required JSON format:\n"
-    "{\n"
-    '  "merchant": "Store Name",\n'
-    '  "date": "YYYY-MM-DD",\n'
-    '  "total_spend": 12.34,\n'
-    '  "categories": {"Groceries": 12.34},\n'
-    '  "line_items": [{"description": "Item Name", "category": "Groceries", "amount": 12.34}],\n'
-    '  "notes": "Short summary"\n'
-    "}"
-)
+DEFAULT_RECEIPT_SYSTEM_PROMPT = """You are an expert AI financial accountant and receipt OCR specialist.
+Your task is to analyze the provided receipt or invoice image and extract structured financial data with 100% precision.
+
+### EXTRACTION GUIDELINES:
+1. MERCHANT:
+   - Identify the business, store, or vendor name (e.g., "Trader Joe's", "Shell", "Costco", "Cider Cellar", "Target", "Uber").
+   - If unreadable, use "Unknown Merchant".
+
+2. TRANSACTION DATE:
+   - Locate the purchase/transaction date printed on the receipt (check header, footer, tax lines, or transaction timestamp).
+   - Convert strictly to ISO format 'YYYY-MM-DD' (e.g. '2024-11-16' or '2018-09-24').
+   - If the year is 2 digits, infer the 4-digit century (e.g. '18' -> '2018').
+   - If NO date is visible or legible anywhere on the receipt, output null.
+
+3. LINE ITEMS (CRITICAL: Extract EVERY single item, product, fee, and adjustment):
+   - "item": Exact description/name of the product or service (e.g. "Bulmers Original Bottle", "Organic Milk 1L").
+   - "quantity": Number of units purchased as float/int (default 1.0).
+   - "unit_price": Price per single unit as float.
+   - "total_price": Final line item charge as float (e.g. 4.00).
+   - "category": Select the single most accurate budget category from:
+     * "Groceries"
+     * "Dining & Food"
+     * "Alcohol & Drinks"
+     * "Housing"
+     * "Utilities"
+     * "Transportation"
+     * "Shopping"
+     * "Entertainment"
+     * "Healthcare"
+     * "Personal Care"
+     * "Discounts & Adjustments"
+     * "Other"
+
+4. DISCOUNTS, SURCHARGES & OVERRIDES:
+   - Promo codes, manager overrides, bottle deposits, returns, and discounts MUST be recorded as separate line items with category "Discounts & Adjustments" and negative total_price (e.g. -2.00).
+
+5. GRAND TOTAL:
+   - The final total charged or paid on the receipt as a numeric float (e.g. 4.50).
+
+6. CATEGORIES BREAKDOWN:
+   - A key-value dictionary mapping each category to its sum: {"Alcohol & Drinks": 8.00, "Discounts & Adjustments": -3.00}.
+
+7. SUMMARY NOTES:
+   - A concise 1-sentence transaction summary.
+
+### OUTPUT REQUIREMENT:
+You must output ONLY raw, valid JSON conforming exactly to this structure:
+{
+  "merchant": "Store Name",
+  "date": "YYYY-MM-DD or null",
+  "grand_total": 0.00,
+  "categories": {
+    "Category Name": 0.00
+  },
+  "line_items": [
+    {
+      "item": "Product Description",
+      "quantity": 1.0,
+      "unit_price": 0.00,
+      "total_price": 0.00,
+      "category": "Category Name"
+    }
+  ],
+  "notes": "Transaction summary"
+}
+"""
+
+
+def build_receipt_prompt(user_prompt: str | None = None) -> str:
+    base = DEFAULT_RECEIPT_SYSTEM_PROMPT.strip()
+    if user_prompt and user_prompt.strip() and user_prompt.strip() != base:
+        return (
+            f"{base}\n\n"
+            f"### ADDITIONAL USER INSTRUCTIONS:\n{user_prompt.strip()}\n\n"
+            "REMINDER: Regardless of additional instructions, you MUST return ONLY a JSON object matching the required schema above."
+        )
+    return base
+
+
+_runtime_gemini_key: str | None = None
+
+
+def save_gemini_key(key: str) -> None:
+    global _runtime_gemini_key
+    clean_key = (key or "").strip()
+    _runtime_gemini_key = clean_key
+    import os
+    os.environ["GEMINI_API_KEY"] = clean_key
+    try:
+        client = get_supabase_client()
+        client.table("app_settings").upsert(
+            {"key": "gemini_api_key", "value": clean_key}, on_conflict="key"
+        ).execute()
+    except Exception:
+        pass
+
+
+def get_gemini_key(override_key: str | None = None) -> str:
+    if override_key and override_key.strip():
+        return override_key.strip()
+    if _runtime_gemini_key and _runtime_gemini_key.strip():
+        return _runtime_gemini_key.strip()
+    import os
+    env_key = os.getenv("GEMINI_API_KEY") or settings.gemini_api_key
+    if env_key and env_key.strip():
+        return env_key.strip()
+    try:
+        client = get_supabase_client()
+        res = client.table("app_settings").select("value").eq("key", "gemini_api_key").limit(1).execute()
+        if res.data and res.data[0].get("value"):
+            return res.data[0]["value"]
+    except Exception:
+        pass
+    return ""
+
+
+def ensure_gemini_configured(override_key: str | None = None) -> str:
+    api_key = get_gemini_key(override_key)
+    if not api_key:
+        raise ValueError(
+            "Gemini API key is missing. Please add your API key in Settings (or pass it in the request, or configure GEMINI_API_KEY in environment variables)."
+        )
+    return api_key
 
 
 def _resolve_receipt_date(
@@ -116,10 +217,30 @@ def _save_receipt_line_items(
     rows = []
     for item in line_items:
         description = (
-            str(item.get("description") or "Receipt item").strip() or "Receipt item"
+            str(
+                item.get("item")
+                or item.get("description")
+                or item.get("name")
+                or item.get("title")
+                or "Receipt item"
+            ).strip()
+            or "Receipt item"
         )
         category = str(item.get("category") or "Other").strip() or "Other"
-        amount = float(item.get("amount") or 0.0)
+        raw_amt = (
+            item.get("total_price")
+            if item.get("total_price") is not None
+            else (
+                item.get("amount")
+                if item.get("amount") is not None
+                else item.get("price", 0.0)
+            )
+        )
+        try:
+            amount = float(raw_amt)
+        except (ValueError, TypeError):
+            amount = 0.0
+
         rows.append(
             {
                 "date": date_str,
@@ -163,19 +284,6 @@ def ensure_seed_user() -> None:
     ).execute()
 
 
-def get_gemini_key() -> str:
-    return settings.gemini_api_key
-
-
-def ensure_gemini_configured() -> str:
-    api_key = get_gemini_key()
-    if not api_key:
-        raise ValueError(
-            "Gemini API key is missing. Add GEMINI_API_KEY to the repository root .env file."
-        )
-    return api_key
-
-
 def build_month_key(value: date | str | None) -> str:
     if value is None:
         return datetime.utcnow().strftime("%Y-%m")
@@ -189,13 +297,16 @@ def analyze_receipt_image(
     mime_type: str,
     month: str | None = None,
     system_prompt: str | None = None,
+    override_api_key: str | None = None,
 ) -> dict[str, Any]:
-    api_key = ensure_gemini_configured()
+    api_key = ensure_gemini_configured(override_api_key)
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-3.5-flash-lite")
+    model = genai.GenerativeModel(
+        "gemini-3.5-flash-lite",
+        generation_config={"response_mime_type": "application/json"},
+    )
 
-    user_prompt = (system_prompt or "").strip()
-    prompt = user_prompt if user_prompt else DEFAULT_RECEIPT_SYSTEM_PROMPT
+    prompt = build_receipt_prompt(system_prompt)
 
     image_part = {
         "inline_data": {
@@ -241,8 +352,8 @@ def analyze_receipt_image(
         if not isinstance(item, dict):
             continue
         desc = str(
-            item.get("description")
-            or item.get("item")
+            item.get("item")
+            or item.get("description")
             or item.get("name")
             or item.get("title")
             or "Receipt item"
@@ -255,11 +366,11 @@ def analyze_receipt_image(
         ).strip()
 
         raw_amt = (
-            item.get("amount")
-            if item.get("amount") is not None
+            item.get("total_price")
+            if item.get("total_price") is not None
             else (
-                item.get("total_price")
-                if item.get("total_price") is not None
+                item.get("amount")
+                if item.get("amount") is not None
                 else (
                     item.get("price")
                     if item.get("price") is not None
@@ -274,16 +385,20 @@ def analyze_receipt_image(
 
         normalized_line_items.append(
             {
+                "item": desc,
                 "description": desc,
                 "category": cat,
                 "amount": amt,
+                "total_price": amt,
+                "quantity": item.get("quantity", 1),
+                "unit_price": item.get("unit_price", amt),
             }
         )
 
     # 3. Flexible total spend extraction
     raw_total = (
-        payload.get("total_spend")
-        or payload.get("grand_total")
+        payload.get("grand_total")
+        or payload.get("total_spend")
         or payload.get("total")
         or payload.get("total_amount")
         or payload.get("amount")
