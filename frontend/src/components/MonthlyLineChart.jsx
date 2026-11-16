@@ -1,25 +1,63 @@
 import React, { useState } from 'react';
 
-function formatMonthLabel(monthKey) {
-  if (!monthKey) return '';
-  const parts = monthKey.split('-');
-  if (parts.length < 2) return monthKey;
-  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const monthIdx = parseInt(parts[1], 10) - 1;
-  const yearShort = parts[0].slice(-2);
-  const name = monthNames[monthIdx] || parts[1];
-  return `${name} '${yearShort}`;
+function formatChartLabel(key, unit = 'month') {
+  if (!key) return '';
+  const parts = key.split('-');
+
+  // Full date: YYYY-MM-DD
+  if (parts.length === 3) {
+    const d = new Date(`${key}T00:00:00`);
+    if (!isNaN(d.getTime())) {
+      const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      return `${dayNames[d.getDay()]} ${d.getDate()}`;
+    }
+  }
+
+  // Month: YYYY-MM
+  if (parts.length === 2) {
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const monthIdx = parseInt(parts[1], 10) - 1;
+    const yearShort = parts[0].slice(-2);
+    const name = monthNames[monthIdx] || parts[1];
+    return `${name} '${yearShort}`;
+  }
+
+  return key;
 }
 
-export default function MonthlyLineChart({ data }) {
+function formatTooltipTitle(key) {
+  if (!key) return '';
+  const parts = key.split('-');
+
+  // Full date
+  if (parts.length === 3) {
+    const d = new Date(`${key}T00:00:00`);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    }
+  }
+
+  // Month
+  if (parts.length === 2) {
+    const d = new Date(`${key}-01T00:00:00`);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    }
+  }
+
+  return key;
+}
+
+export default function MonthlyLineChart({ data, unit = 'month', emptyMessage = 'No spend recorded for this period' }) {
   const [activePoint, setActivePoint] = useState(null);
 
   const sortedEntries = Object.entries(data || {})
     .filter(([key]) => Boolean(key))
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([month, amount]) => ({
-      month,
-      label: formatMonthLabel(month),
+    .map(([key, amount]) => ({
+      key,
+      label: formatChartLabel(key, unit),
+      tooltipTitle: formatTooltipTitle(key),
       amount: Number(amount) || 0,
     }));
 
@@ -27,7 +65,7 @@ export default function MonthlyLineChart({ data }) {
     return (
       <div className="chart-empty">
         <div className="chart-empty-icon">📈</div>
-        <p>No monthly spend recorded yet</p>
+        <p>{emptyMessage}</p>
       </div>
     );
   }
@@ -43,7 +81,6 @@ export default function MonthlyLineChart({ data }) {
   const chartH = svgHeight - padTop - padBottom;
 
   const maxValRaw = Math.max(...sortedEntries.map((e) => e.amount), 50);
-  // Round up maxVal to a clean ceiling
   const magnitude = Math.pow(10, Math.floor(Math.log10(maxValRaw)));
   const maxVal = Math.ceil(maxValRaw / magnitude) * magnitude || 100;
 
@@ -82,7 +119,6 @@ export default function MonthlyLineChart({ data }) {
     ? `${pathD} L ${points[points.length - 1].x} ${zeroY} L ${points[0].x} ${zeroY} Z`
     : '';
 
-  // 3 horizontal grid lines (0%, 50%, 100%)
   const gridLevels = [
     { value: maxVal, y: padTop },
     { value: maxVal / 2, y: padTop + chartH / 2 },
@@ -99,7 +135,7 @@ export default function MonthlyLineChart({ data }) {
             top: `${(activePoint.y / svgHeight) * 100}%`,
           }}
         >
-          <div className="tooltip-month">{activePoint.label || activePoint.month}</div>
+          <div className="tooltip-month">{activePoint.tooltipTitle || activePoint.label}</div>
           <div className="tooltip-value">
             ${activePoint.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </div>
@@ -165,19 +201,17 @@ export default function MonthlyLineChart({ data }) {
         />
 
         {/* Data points & X labels */}
-        {points.map((pt, i) => {
-          const isActive = activePoint?.month === pt.month;
+        {points.map((pt) => {
+          const isActive = activePoint?.key === pt.key;
           return (
             <g
-              key={pt.month}
+              key={pt.key}
               className="chart-point-group"
               onMouseEnter={() => setActivePoint(pt)}
               onMouseLeave={() => setActivePoint(null)}
             >
-              {/* Invisible larger hover hit area */}
               <circle cx={pt.x} cy={pt.y} r="16" fill="transparent" style={{ cursor: 'pointer' }} />
 
-              {/* Halo when active */}
               {isActive && (
                 <circle
                   cx={pt.x}
@@ -189,7 +223,6 @@ export default function MonthlyLineChart({ data }) {
                 />
               )}
 
-              {/* Point circle */}
               <circle
                 cx={pt.x}
                 cy={pt.y}
@@ -200,7 +233,6 @@ export default function MonthlyLineChart({ data }) {
                 style={{ cursor: 'pointer', transition: 'all 0.2s ease' }}
               />
 
-              {/* X Axis label */}
               <text
                 x={pt.x}
                 y={zeroY + 22}

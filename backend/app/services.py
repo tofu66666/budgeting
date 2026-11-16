@@ -208,20 +208,116 @@ def analyze_receipt_image(
     text = response.text
     payload = _extract_json_object(text)
 
-    detected_date_raw = payload.get("date")
-    merchant = str(payload.get("merchant") or "Receipt Merchant").strip()
+    # 1. Flexible date extraction supporting multiple key variants
+    detected_date_raw = (
+        payload.get("date")
+        or payload.get("transaction_date")
+        or payload.get("receipt_date")
+        or payload.get("purchase_date")
+        or payload.get("invoice_date")
+    )
+    merchant = str(
+        payload.get("merchant")
+        or payload.get("store")
+        or payload.get("vendor")
+        or payload.get("store_name")
+        or "Receipt Merchant"
+    ).strip()
+
     resolved_date, was_detected = _resolve_receipt_date(detected_date_raw, month)
 
-    categories = payload.get("categories", {})
-    line_items = payload.get("line_items", [])
-    total = float(
-        payload.get(
-            "total_spend", sum(float(item.get("amount", 0)) for item in line_items)
-        )
+    # 2. Flexible line items extraction
+    raw_line_items = (
+        payload.get("line_items")
+        or payload.get("items")
+        or payload.get("purchases")
+        or []
     )
+    if not isinstance(raw_line_items, list):
+        raw_line_items = []
+
+    normalized_line_items = []
+    for item in raw_line_items:
+        if not isinstance(item, dict):
+            continue
+        desc = str(
+            item.get("description")
+            or item.get("item")
+            or item.get("name")
+            or item.get("title")
+            or "Receipt item"
+        ).strip()
+
+        cat = str(
+            item.get("category")
+            or payload.get("category")
+            or "Other"
+        ).strip()
+
+        raw_amt = (
+            item.get("amount")
+            if item.get("amount") is not None
+            else (
+                item.get("total_price")
+                if item.get("total_price") is not None
+                else (
+                    item.get("price")
+                    if item.get("price") is not None
+                    else item.get("unit_price", 0.0)
+                )
+            )
+        )
+        try:
+            amt = float(raw_amt)
+        except (ValueError, TypeError):
+            amt = 0.0
+
+        normalized_line_items.append(
+            {
+                "description": desc,
+                "category": cat,
+                "amount": amt,
+            }
+        )
+
+    # 3. Flexible total spend extraction
+    raw_total = (
+        payload.get("total_spend")
+        or payload.get("grand_total")
+        or payload.get("total")
+        or payload.get("total_amount")
+        or payload.get("amount")
+    )
+    if raw_total is not None:
+        try:
+            total = float(raw_total)
+        except (ValueError, TypeError):
+            total = sum(float(item["amount"]) for item in normalized_line_items)
+    else:
+        total = sum(float(item["amount"]) for item in normalized_line_items)
+
+    # 4. Flexible category map extraction
+    raw_categories = payload.get("categories")
+    categories = {}
+    if isinstance(raw_categories, dict) and raw_categories:
+        for k, v in raw_categories.items():
+            try:
+                categories[str(k)] = float(v)
+            except (ValueError, TypeError):
+                pass
+    if not categories and normalized_line_items:
+        for item in normalized_line_items:
+            cat = item["category"]
+            categories[cat] = round(
+                categories.get(cat, 0.0) + float(item["amount"]), 2
+            )
+
+    notes = str(payload.get("notes") or "").strip()
+    if not notes:
+        notes = f"{merchant} receipt with {len(normalized_line_items)} extracted item(s)."
 
     imported_rows = _save_receipt_line_items(
-        line_items=line_items,
+        line_items=normalized_line_items,
         receipt_date=resolved_date,
         merchant=merchant,
     )
@@ -230,10 +326,10 @@ def analyze_receipt_image(
         "merchant": merchant,
         "date": resolved_date.isoformat(),
         "date_detected": was_detected,
-        "line_items": line_items,
+        "line_items": normalized_line_items,
         "categories": categories,
         "monthly_total": total,
-        "notes": payload.get("notes", ""),
+        "notes": notes,
         "raw_text": text,
         "imported_rows": imported_rows,
     }

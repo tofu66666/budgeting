@@ -31,7 +31,9 @@ function App() {
   const [recurring, setRecurring] = useState([]);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
-  const [weekFilter, setWeekFilter] = useState(formatDateInput(new Date()));
+  const [chartTimeframe, setChartTimeframe] = useState('week');
+  const [anchorDate, setAnchorDate] = useState(formatDateInput(new Date()));
+  const [filterTransactionsByChart, setFilterTransactionsByChart] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [form, setForm] = useState({
     date: new Date().toISOString().slice(0, 10),
@@ -312,16 +314,148 @@ function App() {
     }
   };
 
+  const handlePrevPeriod = () => {
+    const cur = new Date(`${anchorDate}T00:00:00`);
+    if (chartTimeframe === 'day') {
+      cur.setDate(cur.getDate() - 1);
+    } else if (chartTimeframe === 'week') {
+      cur.setDate(cur.getDate() - 7);
+    } else if (chartTimeframe === 'month') {
+      cur.setMonth(cur.getMonth() - 1);
+    }
+    setAnchorDate(formatDateInput(cur));
+  };
+
+  const handleNextPeriod = () => {
+    const cur = new Date(`${anchorDate}T00:00:00`);
+    if (chartTimeframe === 'day') {
+      cur.setDate(cur.getDate() + 1);
+    } else if (chartTimeframe === 'week') {
+      cur.setDate(cur.getDate() + 7);
+    } else if (chartTimeframe === 'month') {
+      cur.setMonth(cur.getMonth() + 1);
+    }
+    setAnchorDate(formatDateInput(cur));
+  };
+
+  const handleToday = () => {
+    setAnchorDate(formatDateInput(new Date()));
+  };
+
+  // Compute aggregated chart data for Day, Week, Month, or All Time
+  const chartData = useMemo(() => {
+    const anchor = new Date(`${anchorDate}T00:00:00`);
+    let rangeStart = null;
+    let rangeEnd = null;
+    let periodLabel = '';
+    let trendUnit = 'day';
+    const trendMap = {};
+
+    if (chartTimeframe === 'day') {
+      trendUnit = 'day';
+      rangeStart = formatDateInput(anchor);
+      rangeEnd = rangeStart;
+      periodLabel = anchor.toLocaleDateString(undefined, {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+
+      // Show 7 days ending on anchor date
+      for (let i = 6; i >= 0; i--) {
+        const d = addDays(anchor, -i);
+        trendMap[formatDateInput(d)] = 0;
+      }
+    } else if (chartTimeframe === 'week') {
+      trendUnit = 'day';
+      const wStart = startOfWeek(anchorDate);
+      const wEnd = addDays(wStart, 6);
+      rangeStart = formatDateInput(wStart);
+      rangeEnd = formatDateInput(wEnd);
+      periodLabel = `${wStart.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${wEnd.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+
+      // 7 days of this week
+      for (let i = 0; i < 7; i++) {
+        const d = addDays(wStart, i);
+        trendMap[formatDateInput(d)] = 0;
+      }
+    } else if (chartTimeframe === 'month') {
+      trendUnit = 'month';
+      const y = anchor.getFullYear();
+      const m = anchor.getMonth();
+      const mStart = new Date(y, m, 1);
+      const mEnd = new Date(y, m + 1, 0);
+      rangeStart = formatDateInput(mStart);
+      rangeEnd = formatDateInput(mEnd);
+      periodLabel = anchor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+
+      // Past 6 months ending in anchor month
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(y, m - i, 1);
+        const mKey = d.toISOString().slice(0, 7);
+        trendMap[mKey] = 0;
+      }
+    } else {
+      trendUnit = 'month';
+      periodLabel = 'All Time';
+    }
+
+    const categoryTotals = {};
+    let periodTotal = 0;
+
+    for (const row of spendRows) {
+      const rowDate = row.date || '';
+      const amount = Number(row.amount) || 0;
+      const cat = row.category || 'Other';
+      const rowMonth = rowDate.slice(0, 7);
+
+      const inRange =
+        chartTimeframe === 'all' ||
+        (rangeStart && rangeEnd && rowDate >= rangeStart && rowDate <= rangeEnd);
+
+      if (inRange) {
+        categoryTotals[cat] = (categoryTotals[cat] || 0) + amount;
+        periodTotal += amount;
+      }
+
+      if (chartTimeframe === 'day' || chartTimeframe === 'week') {
+        if (rowDate in trendMap) {
+          trendMap[rowDate] = (trendMap[rowDate] || 0) + amount;
+        }
+      } else if (chartTimeframe === 'month') {
+        if (rowMonth in trendMap) {
+          trendMap[rowMonth] = (trendMap[rowMonth] || 0) + amount;
+        }
+      } else if (chartTimeframe === 'all') {
+        if (rowMonth) {
+          trendMap[rowMonth] = (trendMap[rowMonth] || 0) + amount;
+        }
+      }
+    }
+
+    if (chartTimeframe === 'all' && dashboard?.by_month) {
+      for (const [mKey, amt] of Object.entries(dashboard.by_month)) {
+        trendMap[mKey] = Math.max(trendMap[mKey] || 0, Number(amt) || 0);
+      }
+    }
+
+    return {
+      categoryTotals,
+      trendMap,
+      periodLabel,
+      periodTotal,
+      trendUnit,
+      rangeStart,
+      rangeEnd,
+    };
+  }, [spendRows, dashboard, chartTimeframe, anchorDate]);
+
   // All hooks must be called before any early return (React rules of hooks)
   const filteredSpendRows = useMemo(() => {
     let rows = spendRows;
-    if (weekFilter) {
-      const weekStart = startOfWeek(weekFilter);
-      const weekEnd = addDays(weekStart, 6);
-      rows = rows.filter((item) => {
-        const itemDate = new Date(`${item.date}T00:00:00`);
-        return itemDate >= weekStart && itemDate <= weekEnd;
-      });
+    if (filterTransactionsByChart && chartTimeframe !== 'all' && chartData.rangeStart && chartData.rangeEnd) {
+      rows = rows.filter((item) => item.date >= chartData.rangeStart && item.date <= chartData.rangeEnd);
     }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
@@ -333,7 +467,7 @@ function App() {
       );
     }
     return rows;
-  }, [spendRows, weekFilter, searchQuery]);
+  }, [spendRows, filterTransactionsByChart, chartTimeframe, chartData, searchQuery]);
 
   const filteredSpendTotal = filteredSpendRows.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
@@ -433,40 +567,139 @@ function App() {
         </div>
       </section>
 
-      {/* Visual Charts: Bar Chart for Categories & Line Graph for Months */}
+      {/* Timeframe & Chart Granularity Bar */}
+      <section className="panel timeframe-control-panel">
+        <div className="timeframe-bar">
+          <div className="timeframe-segment">
+            <span className="timeframe-label">Filter View:</span>
+            <div className="timeframe-buttons">
+              <button
+                type="button"
+                className={`ghost pill-btn ${chartTimeframe === 'day' ? 'active' : ''}`}
+                onClick={() => setChartTimeframe('day')}
+              >
+                Day
+              </button>
+              <button
+                type="button"
+                className={`ghost pill-btn ${chartTimeframe === 'week' ? 'active' : ''}`}
+                onClick={() => setChartTimeframe('week')}
+              >
+                Week
+              </button>
+              <button
+                type="button"
+                className={`ghost pill-btn ${chartTimeframe === 'month' ? 'active' : ''}`}
+                onClick={() => setChartTimeframe('month')}
+              >
+                Month
+              </button>
+              <button
+                type="button"
+                className={`ghost pill-btn ${chartTimeframe === 'all' ? 'active' : ''}`}
+                onClick={() => setChartTimeframe('all')}
+              >
+                All Time
+              </button>
+            </div>
+          </div>
+
+          <div className="timeframe-nav">
+            {chartTimeframe !== 'all' ? (
+              <>
+                <button type="button" className="ghost nav-arrow-btn" onClick={handlePrevPeriod} title="Previous period">
+                  ◀
+                </button>
+                <div className="timeframe-period-badge">
+                  <span className="period-icon">📅</span>
+                  <strong>{chartData.periodLabel}</strong>
+                </div>
+                <button type="button" className="ghost nav-arrow-btn" onClick={handleNextPeriod} title="Next period">
+                  ▶
+                </button>
+                <button type="button" className="ghost today-pill-btn" onClick={handleToday}>
+                  Today
+                </button>
+                <input
+                  type="date"
+                  value={anchorDate}
+                  onChange={(e) => setAnchorDate(e.target.value)}
+                  className="date-direct-picker"
+                  title="Jump to date"
+                />
+              </>
+            ) : (
+              <div className="timeframe-period-badge">
+                <span className="period-icon">🌐</span>
+                <strong>All Recorded Transactions</strong>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* Visual Charts: Bar Chart for Categories & Line Graph for Trends */}
       <section className="grid two-col charts-section">
         <div className="panel chart-panel">
           <div className="panel-header">
             <div>
               <h2>Spend by Category</h2>
-              <span className="panel-subtitle">Expense distribution & proportional ranking</span>
+              <span className="panel-subtitle">
+                {chartTimeframe === 'all'
+                  ? 'All-time category distribution'
+                  : `Expenses for ${chartData.periodLabel}`}
+              </span>
             </div>
-            <span className="chart-badge">Bar Chart</span>
+            <span className="chart-badge">
+              ${chartData.periodTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
           </div>
-          <CategoryBarChart data={categoryMap} />
+          <CategoryBarChart data={chartData.categoryTotals} />
         </div>
 
         <div className="panel chart-panel">
           <div className="panel-header">
             <div>
-              <h2>Spend by Month</h2>
-              <span className="panel-subtitle">Historical trajectory & spending timeline</span>
+              <h2>
+                {chartTimeframe === 'day'
+                  ? 'Daily Trajectory (7 Days)'
+                  : chartTimeframe === 'week'
+                  ? 'Weekly Daily Trend'
+                  : chartTimeframe === 'month'
+                  ? 'Monthly Trend (Past 6 Months)'
+                  : 'Historical Monthly Trend'}
+              </h2>
+              <span className="panel-subtitle">
+                {chartTimeframe === 'day'
+                  ? `Day-by-day trend up to ${anchorDate}`
+                  : chartTimeframe === 'week'
+                  ? `Daily spending across ${chartData.periodLabel}`
+                  : chartTimeframe === 'month'
+                  ? 'Recent monthly timeline'
+                  : 'Macro timeline across all recorded months'}
+              </span>
             </div>
-            <span className="chart-badge">Line Graph</span>
+            <span className="chart-badge">
+              {chartData.trendUnit === 'day' ? 'Daily' : 'Monthly'}
+            </span>
           </div>
-          <MonthlyLineChart data={byMonth} />
+          <MonthlyLineChart
+            data={chartData.trendMap}
+            unit={chartData.trendUnit}
+            emptyMessage={`No spending recorded for this ${chartTimeframe}`}
+          />
         </div>
       </section>
 
-      {/* Filter and Overview Controls */}
+      {/* Transactions Explorer */}
       <section className="panel filter-panel">
         <div className="filter-controls-header">
           <div className="filter-title-wrap">
             <h2>Transactions Explorer</h2>
             <span className="panel-subtitle">
-              {weekFilter
-                ? `Showing week of ${weekStartDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${weekEndDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
-                : 'Showing all-time spend entries'}
+              {filterTransactionsByChart && chartTimeframe !== 'all'
+                ? `Filtered to active ${chartTimeframe}: ${chartData.periodLabel}`
+                : 'All transactions across all time'}
             </span>
           </div>
           <div className="filter-inputs-row">
@@ -479,31 +712,15 @@ function App() {
                 className="search-input"
               />
             </div>
-            <div className="date-picker-wrap">
-              <input
-                type="date"
-                value={weekFilter}
-                onChange={(e) => setWeekFilter(e.target.value)}
-                title="Select any date to view that week"
-              />
-            </div>
             <div className="filter-quick-buttons">
               <button
                 type="button"
-                className={`ghost pill-btn ${weekFilter === formatDateInput(new Date()) ? 'active' : ''}`}
-                onClick={() => setWeekFilter(formatDateInput(new Date()))}
+                className={`ghost pill-btn ${filterTransactionsByChart ? 'active' : ''}`}
+                onClick={() => setFilterTransactionsByChart(!filterTransactionsByChart)}
+                title="Toggle filtering table by chart timeframe"
               >
-                Current Week
+                {filterTransactionsByChart ? `Filtered to ${chartTimeframe}` : 'Showing All Time'}
               </button>
-              {weekFilter && (
-                <button
-                  type="button"
-                  className="ghost pill-btn"
-                  onClick={() => setWeekFilter('')}
-                >
-                  Show All
-                </button>
-              )}
             </div>
           </div>
         </div>

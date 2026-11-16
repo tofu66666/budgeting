@@ -41,12 +41,14 @@ export default function ReceiptResultView({ result }) {
           <div className="receipt-items-heading">Extracted Items ({lineItems.length})</div>
           <div className="receipt-items-table">
             {lineItems.map((item, idx) => {
-              const amount = Number(item.amount || 0);
+              const desc = item.description || item.item || item.name || 'Receipt Item';
+              const rawAmt = item.amount !== undefined ? item.amount : (item.total_price !== undefined ? item.total_price : item.price);
+              const amount = Number(rawAmt || 0);
               const isDiscount = amount < 0;
               return (
                 <div key={idx} className="receipt-item-row">
                   <div className="receipt-item-info">
-                    <span className="receipt-item-desc">{item.description || 'Receipt Item'}</span>
+                    <span className="receipt-item-desc">{desc}</span>
                     <span className="receipt-item-cat">{item.category || 'General'}</span>
                   </div>
                   <div className={`receipt-item-price ${isDiscount ? 'discount' : ''}`}>
