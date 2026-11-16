@@ -1,13 +1,14 @@
 {
-  "framework": "container",
   "services": {
     "frontend": {
       "root": "frontend",
-      "entrypoint": "Dockerfile"
+      "entrypoint": "Dockerfile",
+      "framework": "container"
     },
     "backend": {
       "root": "backend",
-      "entrypoint": "Dockerfile"
+      "entrypoint": "Dockerfile",
+      "framework": "container"
     }
   },
   "rewrites": [
