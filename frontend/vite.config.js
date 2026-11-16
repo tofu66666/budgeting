@@ -8,6 +8,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port,
+    allowedHosts: ['budgeting-git-main-ai-gateway3.vercel.app'],
   },
   preview: {
     host: '0.0.0.0',
