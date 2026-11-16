@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port ${PORT:-5173}",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0 --port ${PORT:-4173}",
-    "start": "vite preview --host 0.0.0.0 --port ${PORT:-4173}"
+    "preview": "vite preview --host 0.0.0.0 --port ${PORT:-80}",
+    "start": "vite preview --host 0.0.0.0 --port ${PORT:-80}"
   },
   "dependencies": {
     "react": "^18.3.1",

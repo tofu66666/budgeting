@@ -1,4 +1,5 @@
 {
+  "framework": "container",
   "services": {
     "frontend": {
       "root": "frontend",
