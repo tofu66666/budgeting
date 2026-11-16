@@ -35,6 +35,27 @@ def create_access_token(username: str) -> str:
 
 
 def authenticate_user(username: str, password: str) -> Optional[BudgetUser]:
+    try:
+        client = get_supabase_client()
+        result = (
+            client.table("budget_users")
+            .select("*")
+            .eq("username", username)
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            user_data = result.data[0]
+            if verify_password(password, user_data.get("password_hash", "")):
+                return BudgetUser(
+                    id=user_data.get("id", 1),
+                    username=user_data["username"],
+                    password_hash=user_data["password_hash"],
+                    is_admin=user_data.get("is_admin", True),
+                )
+    except Exception:
+        pass
+
     if username == ADMIN_USERNAME and verify_password(password, ADMIN_PASSWORD_HASH):
         return BudgetUser(
             id=1,

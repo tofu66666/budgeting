@@ -37,22 +37,32 @@ def _extract_json_object(raw_text: str) -> dict[str, Any]:
     return payload
 
 
+def _parse_month_date(month_str: str | None) -> date:
+    if not month_str:
+        return datetime.utcnow().date()
+    clean = month_str.strip()
+    try:
+        if len(clean) == 7:
+            return datetime.strptime(f"{clean}-01", "%Y-%m-%d").date()
+        if len(clean) >= 10:
+            return datetime.strptime(clean[:10], "%Y-%m-%d").date()
+    except Exception:
+        pass
+    return datetime.utcnow().date()
+
+
 def _save_receipt_line_items(month: str, line_items: list[dict[str, Any]]) -> int:
     if not line_items:
         return 0
 
-    row_date = (
-        datetime.strptime(f"{month}-01", "%Y-%m-%d").date()
-        if month
-        else datetime.utcnow().date()
-    )
+    row_date = _parse_month_date(month)
     rows = []
     for item in line_items:
         description = (
             str(item.get("description") or "Receipt item").strip() or "Receipt item"
         )
         category = str(item.get("category") or "Other").strip() or "Other"
-        amount = float(item.get("amount", 0))
+        amount = float(item.get("amount") or 0.0)
         rows.append(
             {
                 "date": row_date.isoformat(),
@@ -61,7 +71,7 @@ def _save_receipt_line_items(month: str, line_items: list[dict[str, Any]]) -> in
                 "merchant": description,
                 "notes": f"Receipt import: {description}",
                 "source": "receipt_ai",
-                "month": month or build_month_key(row_date),
+                "month": month[:7] if (month and len(month) >= 7) else build_month_key(row_date),
             }
         )
 
@@ -172,32 +182,30 @@ def sum_spend_by_category(month: str | None = None) -> dict[str, float]:
     query = client.table("spend_entries").select("category, amount")
     if month:
         query = query.eq("month", month)
-    rows = query.execute().data
+    rows = query.execute().data or []
     totals: dict[str, float] = {}
     for row in rows:
-        totals[row["category"]] = totals.get(row["category"], 0.0) + float(
-            row["amount"]
-        )
+        cat = row.get("category") or "Uncategorized"
+        totals[cat] = round(totals.get(cat, 0.0) + float(row.get("amount") or 0.0), 2)
     return totals
 
 
 def get_dashboard_summary() -> dict[str, Any]:
     client = get_supabase_client()
-    spend_rows = client.table("spend_entries").select("amount").execute().data
-    total_spend = sum(float(row["amount"]) for row in spend_rows)
+    spend_rows = client.table("spend_entries").select("amount").execute().data or []
+    total_spend = sum(float(row.get("amount") or 0.0) for row in spend_rows)
     by_category = sum_spend_by_category()
     monthly_totals: dict[str, float] = {}
-    for row in client.table("spend_entries").select("month, amount").execute().data:
-        monthly_totals[row["month"]] = monthly_totals.get(row["month"], 0.0) + float(
-            row["amount"]
-        )
-    recurring_rows = client.table("recurring_expenses").select("amount").execute().data
-    recurring_total = sum(float(row["amount"]) for row in recurring_rows)
+    for row in client.table("spend_entries").select("month, amount").execute().data or []:
+        m = row.get("month") or "unknown"
+        monthly_totals[m] = round(monthly_totals.get(m, 0.0) + float(row.get("amount") or 0.0), 2)
+    recurring_rows = client.table("recurring_expenses").select("amount").execute().data or []
+    recurring_total = sum(float(row.get("amount") or 0.0) for row in recurring_rows)
     return {
-        "total_spend": float(total_spend),
+        "total_spend": round(float(total_spend), 2),
         "by_category": by_category,
         "by_month": monthly_totals,
-        "recurring_total": float(recurring_total),
+        "recurring_total": round(float(recurring_total), 2),
     }
 
 

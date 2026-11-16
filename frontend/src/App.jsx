@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import CategoryBarChart from './components/CategoryBarChart';
+import MonthlyLineChart from './components/MonthlyLineChart';
+import ReceiptResultView from './components/ReceiptResultView';
 
 const API_BASE = '';
 const apiUrl = (path) => `/api${path}`;
@@ -28,6 +31,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
   const [weekFilter, setWeekFilter] = useState(formatDateInput(new Date()));
+  const [searchQuery, setSearchQuery] = useState('');
   const [form, setForm] = useState({
     date: new Date().toISOString().slice(0, 10),
     amount: '',
@@ -90,6 +94,10 @@ function App() {
       const res = await fetch(apiUrl('/dashboard'), {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (res.status === 401) {
+        logout();
+        return;
+      }
       if (!res.ok) throw new Error('Unable to load dashboard');
       const data = await res.json();
       setDashboard(data);
@@ -107,6 +115,10 @@ function App() {
         fetch(apiUrl('/spend'), { headers: { Authorization: `Bearer ${token}` } }),
         fetch(apiUrl('/recurring'), { headers: { Authorization: `Bearer ${token}` } }),
       ]);
+      if (spendRes.status === 401 || recurringRes.status === 401) {
+        logout();
+        return;
+      }
       if (spendRes.ok) setSpendRows(await spendRes.json());
       if (recurringRes.ok) setRecurring(await recurringRes.json());
     } catch (err) {
@@ -129,7 +141,10 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(login),
       });
-      if (!res.ok) throw new Error('Login failed');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Login failed');
+      }
       const data = await res.json();
       setToken(data.access_token);
       localStorage.setItem('budget-token', data.access_token);
@@ -152,7 +167,10 @@ function App() {
         headers: authHeaders,
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error(editingSpendId ? 'Unable to update spend' : 'Unable to save spend');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || (editingSpendId ? 'Unable to update spend' : 'Unable to save spend'));
+      }
       resetSpendForm();
       await loadDashboard();
       await loadAll();
@@ -168,7 +186,10 @@ function App() {
         method: 'DELETE',
         headers: authHeaders,
       });
-      if (!res.ok) throw new Error('Unable to delete spend');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Unable to delete spend');
+      }
       if (editingSpendId === id) resetSpendForm();
       await loadDashboard();
       await loadAll();
@@ -201,7 +222,10 @@ function App() {
         headers: authHeaders,
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error(editingRecurringId ? 'Unable to update recurring expense' : 'Unable to save recurring expense');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || (editingRecurringId ? 'Unable to update recurring expense' : 'Unable to save recurring expense'));
+      }
       resetRecurringForm();
       await loadAll();
       setStatus(editingRecurringId ? 'Recurring expense updated' : 'Recurring expense saved');
@@ -216,7 +240,10 @@ function App() {
         method: 'DELETE',
         headers: authHeaders,
       });
-      if (!res.ok) throw new Error('Unable to delete recurring expense');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Unable to delete recurring expense');
+      }
       if (editingRecurringId === id) resetRecurringForm();
       await loadAll();
       setStatus('Recurring expense deleted');
@@ -333,11 +360,11 @@ function App() {
       <section className="grid stats-grid">
         <div className="card highlight">
           <span>Total spend</span>
-          <strong>${dashboard?.total_spend?.toFixed(2) || '0.00'}</strong>
+          <strong>${Number(dashboard?.total_spend || 0).toFixed(2)}</strong>
         </div>
         <div className="card">
           <span>Recurring</span>
-          <strong>${dashboard?.recurring_total?.toFixed(2) || '0.00'}</strong>
+          <strong>${Number(dashboard?.recurring_total || 0).toFixed(2)}</strong>
         </div>
         <div className="card">
           <span>Categories</span>

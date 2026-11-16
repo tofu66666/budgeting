@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, File, Form, UploadFile
+import logging
+
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, File, Form, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.auth import get_current_user
 from app.config import get_settings
@@ -26,6 +29,7 @@ from app.services import (
     update_manual_spend,
 )
 
+logger = logging.getLogger("uvicorn.error")
 settings = get_settings()
 
 api_router = APIRouter(prefix="/api")
@@ -33,21 +37,26 @@ api_router = APIRouter(prefix="/api")
 app = FastAPI(title=settings.app_name, version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        settings.frontend_origin,
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "*",
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    msg = str(exc)
+    status_code = 404 if "not found" in msg.lower() else 400
+    return JSONResponse(status_code=status_code, content={"detail": msg})
+
+
 @app.on_event("startup")
 def startup_event():
-    ensure_seed_user()
+    try:
+        ensure_seed_user()
+    except Exception as exc:
+        logger.warning(f"Could not seed admin user on startup: {exc}")
 
 
 @api_router.get("/health")
