@@ -238,20 +238,6 @@ function App() {
     });
   };
 
-  const saveSettings = async () => {
-    try {
-      const res = await fetch(apiUrl('/settings'), {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({ gemini_api_key: settings.gemini_api_key || '' }),
-      });
-      if (!res.ok) throw new Error('Unable to save settings');
-      setStatus('Gemini API key saved');
-    } catch (err) {
-      setStatus(err.message);
-    }
-  };
-
   const analyzeReceipt = async () => {
     if (!receiptFile) {
       setStatus('Choose a receipt image first');
@@ -283,6 +269,20 @@ function App() {
     }
   };
 
+  // All hooks must be called before any early return (React rules of hooks)
+  const filteredSpendRows = useMemo(() => {
+    if (!weekFilter) return spendRows;
+    const weekStart = startOfWeek(weekFilter);
+    const weekEnd = addDays(weekStart, 6);
+
+    return spendRows.filter((item) => {
+      const itemDate = new Date(`${item.date}T00:00:00`);
+      return itemDate >= weekStart && itemDate <= weekEnd;
+    });
+  }, [spendRows, weekFilter]);
+
+  const filteredSpendTotal = filteredSpendRows.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
   const logout = () => {
     localStorage.removeItem('budget-token');
     setToken('');
@@ -294,7 +294,7 @@ function App() {
   if (!token) {
     return (
       <div className="page auth-page">
-        <div className="panel login-panel">
+        <form className="panel login-panel" onSubmit={(e) => { e.preventDefault(); loginUser(); }}>
           <h1>Budget Dashboard</h1>
           <div>
             <input
@@ -309,31 +309,17 @@ function App() {
               onChange={(e) => setLogin({ ...login, password: e.target.value })}
             />
           </div>
-          <button onClick={loginUser}>Login</button>
+          <button type="submit">Login</button>
           {status && <div className="message">{status}</div>}
-        </div>
+        </form>
       </div>
     );
   }
 
   const categoryMap = dashboard?.by_category || {};
   const byMonth = dashboard?.by_month || {};
-
-  // Filter spend rows by the selected week
   const weekStartDate = startOfWeek(weekFilter);
   const weekEndDate = addDays(weekStartDate, 6);
-  const filteredSpendRows = useMemo(() => {
-    if (!weekFilter) return spendRows;
-    const weekStart = startOfWeek(weekFilter);
-    const weekEnd = addDays(weekStart, 6);
-
-    return spendRows.filter((item) => {
-      const itemDate = new Date(`${item.date}T00:00:00`);
-      return itemDate >= weekStart && itemDate <= weekEnd;
-    });
-  }, [spendRows, weekFilter]);
-
-  const filteredSpendTotal = filteredSpendRows.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
   return (
     <div className="page app-shell">
