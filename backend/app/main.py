@@ -78,8 +78,8 @@ def login(payload: LoginRequest) -> TokenResponse:
 @api_router.post("/receipt/analyze")
 async def analyze_receipt(
     file: UploadFile = File(...),
-    month: str = Form(...),
-    system_prompt: str = Form(...),
+    month: str | None = Form(default=None),
+    system_prompt: str | None = Form(default=None),
     user: BudgetUser = Depends(get_current_user),
 ) -> dict:
     image_data = await file.read()

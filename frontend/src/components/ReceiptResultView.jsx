@@ -11,16 +11,23 @@ export default function ReceiptResultView({ result }) {
     <div className="receipt-result-card">
       <div className="receipt-result-header">
         <div className="receipt-total-badge">
-          <span className="badge-label">Receipt Total</span>
+          <span className="badge-label">{result.merchant || 'Receipt Total'}</span>
           <strong className="badge-value">
             ${Number(result.monthly_total || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </strong>
         </div>
-        {result.imported_rows > 0 && (
-          <span className="receipt-imported-pill">
-            ✓ {result.imported_rows} item{result.imported_rows !== 1 ? 's' : ''} imported
-          </span>
-        )}
+        <div className="receipt-meta-badges">
+          {result.date && (
+            <span className={`receipt-date-pill ${result.date_detected ? 'detected' : 'fallback'}`}>
+              📅 {result.date} {result.date_detected ? '(Receipt Date)' : '(Today)'}
+            </span>
+          )}
+          {result.imported_rows > 0 && (
+            <span className="receipt-imported-pill">
+              ✓ {result.imported_rows} item{result.imported_rows !== 1 ? 's' : ''} imported
+            </span>
+          )}
+        </div>
       </div>
 
       {result.notes && (

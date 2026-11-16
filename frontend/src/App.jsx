@@ -50,8 +50,8 @@ function App() {
     notes: '',
   });
   const [receiptFile, setReceiptFile] = useState(null);
-  const [receiptMonth, setReceiptMonth] = useState(new Date().toISOString().slice(0, 7));
-  const [receiptPrompt, setReceiptPrompt] = useState('Extract all receipt items, categorize them into budget categories and return concise JSON only. Use exactly these keys: total_spend, categories, line_items, notes. Do not include category_totals, summary, markdown, commentary, or any extra sections. Include each line item individually, including discounts, price overrides, refunds, and adjustments. Keep negative amounts for discounts/refunds. Output valid JSON only, no code fences, and no explanation.');
+  const [receiptMonth, setReceiptMonth] = useState('');
+  const [receiptPrompt, setReceiptPrompt] = useState('Extract all receipt items with merchant, transaction date (YYYY-MM-DD), categorized line items, and grand total. If date is not visible on receipt, output null.');
   const [analyzingReceipt, setAnalyzingReceipt] = useState(false);
   const [receiptResult, setReceiptResult] = useState(null);
   const [editingSpendId, setEditingSpendId] = useState(null);
@@ -272,8 +272,8 @@ function App() {
     }
     setAnalyzingReceipt(true);
     const formData = new FormData();
-    formData.append('month', receiptMonth);
-    formData.append('system_prompt', receiptPrompt);
+    if (receiptMonth) formData.append('month', receiptMonth);
+    if (receiptPrompt) formData.append('system_prompt', receiptPrompt);
     formData.append('file', receiptFile);
 
     try {
@@ -298,15 +298,26 @@ function App() {
 
   // All hooks must be called before any early return (React rules of hooks)
   const filteredSpendRows = useMemo(() => {
-    if (!weekFilter) return spendRows;
-    const weekStart = startOfWeek(weekFilter);
-    const weekEnd = addDays(weekStart, 6);
-
-    return spendRows.filter((item) => {
-      const itemDate = new Date(`${item.date}T00:00:00`);
-      return itemDate >= weekStart && itemDate <= weekEnd;
-    });
-  }, [spendRows, weekFilter]);
+    let rows = spendRows;
+    if (weekFilter) {
+      const weekStart = startOfWeek(weekFilter);
+      const weekEnd = addDays(weekStart, 6);
+      rows = rows.filter((item) => {
+        const itemDate = new Date(`${item.date}T00:00:00`);
+        return itemDate >= weekStart && itemDate <= weekEnd;
+      });
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      rows = rows.filter(
+        (item) =>
+          (item.merchant || '').toLowerCase().includes(q) ||
+          (item.category || '').toLowerCase().includes(q) ||
+          (item.notes || '').toLowerCase().includes(q)
+      );
+    }
+    return rows;
+  }, [spendRows, weekFilter, searchQuery]);
 
   const filteredSpendTotal = filteredSpendRows.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
@@ -322,21 +333,35 @@ function App() {
     return (
       <div className="page auth-page">
         <form className="panel login-panel" onSubmit={(e) => { e.preventDefault(); loginUser(); }}>
-          <h1>Budget Dashboard</h1>
-          <div>
-            <input
-              placeholder="Account"
-              value={login.username}
-              onChange={(e) => setLogin({ ...login, username: e.target.value })}
-            />
-            <input
-              type="password"
-              placeholder="Access key"
-              value={login.password}
-              onChange={(e) => setLogin({ ...login, password: e.target.value })}
-            />
+          <div className="login-header">
+            <div className="login-logo">💰</div>
+            <h1>Budget AI Dashboard</h1>
+            <p className="login-subtitle">Sign in to track spend & analyze receipts</p>
           </div>
-          <button type="submit">Login</button>
+          <div className="login-inputs">
+            <label className="input-group">
+              <span className="input-label">Username</span>
+              <input
+                placeholder="Account name"
+                value={login.username}
+                onChange={(e) => setLogin({ ...login, username: e.target.value })}
+                required
+              />
+            </label>
+            <label className="input-group">
+              <span className="input-label">Password</span>
+              <input
+                type="password"
+                placeholder="Access key"
+                value={login.password}
+                onChange={(e) => setLogin({ ...login, password: e.target.value })}
+                required
+              />
+            </label>
+          </div>
+          <button type="submit" className="primary-btn" disabled={loading}>
+            {loading ? 'Signing in…' : 'Sign in'}
+          </button>
           {status && <div className="message">{status}</div>}
         </form>
       </div>
@@ -351,137 +376,315 @@ function App() {
   return (
     <div className="page app-shell">
       <header className="topbar">
-        <h1>Budget Dashboard</h1>
-        <button className="ghost" onClick={logout}>Logout</button>
+        <div className="brand-group">
+          <span className="brand-icon">💰</span>
+          <div>
+            <h1>Budget Dashboard</h1>
+            <span className="brand-tagline">Personal spend & AI receipt intelligence</span>
+          </div>
+        </div>
+        <button className="ghost logout-btn" onClick={logout}>
+          <span>Sign out</span>
+        </button>
       </header>
 
       {status && <div className="message">{status}</div>}
 
       <section className="grid stats-grid">
         <div className="card highlight">
-          <span>Total spend</span>
-          <strong>${Number(dashboard?.total_spend || 0).toFixed(2)}</strong>
-        </div>
-        <div className="card">
-          <span>Recurring</span>
-          <strong>${Number(dashboard?.recurring_total || 0).toFixed(2)}</strong>
-        </div>
-        <div className="card">
-          <span>Categories</span>
-          <strong>{Object.keys(categoryMap).length}</strong>
-        </div>
-      </section>
-
-      <section className="grid two-col">
-        <div className="panel">
-          <h2>Spend by category</h2>
-          <ul className="rows-list">
-            {Object.entries(categoryMap).map(([key, value]) => (
-              <li key={key}><span>{key}</span><strong>${Number(value).toFixed(2)}</strong></li>
-            ))}
-          </ul>
-        </div>
-
-        <div className="panel">
-          <h2>Spend by month</h2>
-          <ul className="rows-list">
-            {Object.entries(byMonth).map(([key, value]) => (
-              <li key={key}><span>{key}</span><strong>${Number(value).toFixed(2)}</strong></li>
-            ))}
-          </ul>
-        </div>
-      </section>
-
-      <section className="panel">
-        <h2>Week filter</h2>
-        <input type="date" value={weekFilter} onChange={(e) => setWeekFilter(e.target.value)} />
-        <div className="week-summary">
-          <strong>{filteredSpendRows.length} entries</strong>
-          <strong>${filteredSpendTotal.toFixed(2)}</strong>
-        </div>
-      </section>
-
-      <section className="grid three-col">
-        <form className="panel" onSubmit={addSpend}>
-          <h2>Add spend row</h2>
-          <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
-          <input type="number" step="0.01" placeholder="Amount" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
-          <input placeholder="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
-          <input placeholder="Merchant" value={form.merchant} onChange={(e) => setForm({ ...form, merchant: e.target.value })} />
-          <input placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
-          <button type="submit">{editingSpendId ? 'Update spend' : 'Save spend'}</button>
-          {editingSpendId && <button type="button" className="ghost" onClick={resetSpendForm}>Cancel</button>}
-        </form>
-
-        <form className="panel" onSubmit={saveRecurring}>
-          <h2>{editingRecurringId ? 'Edit recurring expense' : 'Recurring expenses'}</h2>
-          <input placeholder="Name" value={recurringForm.name} onChange={(e) => setRecurringForm({ ...recurringForm, name: e.target.value })} />
-          <input placeholder="Category" value={recurringForm.category} onChange={(e) => setRecurringForm({ ...recurringForm, category: e.target.value })} />
-          <input type="number" step="0.01" placeholder="Amount" value={recurringForm.amount} onChange={(e) => setRecurringForm({ ...recurringForm, amount: e.target.value })} />
-          <select value={recurringForm.frequency} onChange={(e) => setRecurringForm({ ...recurringForm, frequency: e.target.value })}>
-            <option value="monthly">Monthly</option>
-            <option value="weekly">Weekly</option>
-            <option value="quarterly">Quarterly</option>
-            <option value="yearly">Yearly</option>
-          </select>
-          <input type="date" value={recurringForm.next_due_date} onChange={(e) => setRecurringForm({ ...recurringForm, next_due_date: e.target.value })} />
-          <textarea placeholder="Notes" value={recurringForm.notes} onChange={(e) => setRecurringForm({ ...recurringForm, notes: e.target.value })} />
-          <button type="submit">{editingRecurringId ? 'Update recurring' : 'Save recurring'}</button>
-          {editingRecurringId && <button type="button" className="ghost" onClick={resetRecurringForm}>Cancel</button>}
-        </form>
-
-        <div className="panel">
-          <h2>Gemini receipt AI</h2>
-          <input type="month" value={receiptMonth} onChange={(e) => setReceiptMonth(e.target.value)} />
-          <input type="file" accept="image/*" onChange={(e) => setReceiptFile(e.target.files?.[0])} />
-          <textarea value={receiptPrompt} rows="4" onChange={(e) => setReceiptPrompt(e.target.value)} />
-          <div className="receipt-actions">
-            <button onClick={analyzeReceipt} disabled={analyzingReceipt}>
-              {analyzingReceipt ? 'Analyzing receipt...' : 'Analyze receipt'}
-            </button>
-            {analyzingReceipt && <div className="message">Processing image…</div>}
+          <div className="card-top">
+            <span>Total Spend</span>
+            <span className="card-icon">💳</span>
           </div>
-          {receiptResult && (
-            <div className="receipt-result">
-              <p><strong>Total:</strong> ${Number(receiptResult.monthly_total || 0).toFixed(2)}</p>
-              <pre>{JSON.stringify(receiptResult, null, 2)}</pre>
+          <strong>${Number(dashboard?.total_spend || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+          <span className="card-footnote">Across all recorded transactions</span>
+        </div>
+        <div className="card">
+          <div className="card-top">
+            <span>Recurring Obligations</span>
+            <span className="card-icon">🔄</span>
+          </div>
+          <strong>${Number(dashboard?.recurring_total || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+          <span className="card-footnote">{recurring.filter(r => r.is_active).length} active subscriptions</span>
+        </div>
+        <div className="card">
+          <div className="card-top">
+            <span>Active Categories</span>
+            <span className="card-icon">🏷️</span>
+          </div>
+          <strong>{Object.keys(categoryMap).length}</strong>
+          <span className="card-footnote">Tracked expense groups</span>
+        </div>
+      </section>
+
+      {/* Visual Charts: Bar Chart for Categories & Line Graph for Months */}
+      <section className="grid two-col charts-section">
+        <div className="panel chart-panel">
+          <div className="panel-header">
+            <div>
+              <h2>Spend by Category</h2>
+              <span className="panel-subtitle">Expense distribution & proportional ranking</span>
             </div>
+            <span className="chart-badge">Bar Chart</span>
+          </div>
+          <CategoryBarChart data={categoryMap} />
+        </div>
+
+        <div className="panel chart-panel">
+          <div className="panel-header">
+            <div>
+              <h2>Spend by Month</h2>
+              <span className="panel-subtitle">Historical trajectory & spending timeline</span>
+            </div>
+            <span className="chart-badge">Line Graph</span>
+          </div>
+          <MonthlyLineChart data={byMonth} />
+        </div>
+      </section>
+
+      {/* Filter and Overview Controls */}
+      <section className="panel filter-panel">
+        <div className="filter-controls-header">
+          <div className="filter-title-wrap">
+            <h2>Transactions Explorer</h2>
+            <span className="panel-subtitle">
+              {weekFilter
+                ? `Showing week of ${weekStartDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${weekEndDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
+                : 'Showing all-time spend entries'}
+            </span>
+          </div>
+          <div className="filter-inputs-row">
+            <div className="search-input-wrap">
+              <input
+                type="text"
+                placeholder="Search merchant, category, note…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="search-input"
+              />
+            </div>
+            <div className="date-picker-wrap">
+              <input
+                type="date"
+                value={weekFilter}
+                onChange={(e) => setWeekFilter(e.target.value)}
+                title="Select any date to view that week"
+              />
+            </div>
+            <div className="filter-quick-buttons">
+              <button
+                type="button"
+                className={`ghost pill-btn ${weekFilter === formatDateInput(new Date()) ? 'active' : ''}`}
+                onClick={() => setWeekFilter(formatDateInput(new Date()))}
+              >
+                Current Week
+              </button>
+              {weekFilter && (
+                <button
+                  type="button"
+                  className="ghost pill-btn"
+                  onClick={() => setWeekFilter('')}
+                >
+                  Show All
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="week-summary-card">
+          <span className="summary-pill">{filteredSpendRows.length} {filteredSpendRows.length === 1 ? 'transaction' : 'transactions'}</span>
+          <span className="summary-amount">${filteredSpendTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+        </div>
+      </section>
+
+      {/* Forms & AI Section */}
+      <section className="grid three-col">
+        <form className="panel form-panel" onSubmit={addSpend}>
+          <div className="panel-header">
+            <h2>{editingSpendId ? 'Edit Spend Row' : 'Add Spend Row'}</h2>
+          </div>
+          <label className="input-group">
+            <span className="input-label">Date</span>
+            <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required />
+          </label>
+          <label className="input-group">
+            <span className="input-label">Amount ($)</span>
+            <input type="number" step="0.01" placeholder="0.00" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
+          </label>
+          <label className="input-group">
+            <span className="input-label">Category</span>
+            <input placeholder="e.g. Groceries, Housing, Dining" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} required />
+          </label>
+          <label className="input-group">
+            <span className="input-label">Merchant</span>
+            <input placeholder="e.g. Trader Joe's, Uber" value={form.merchant} onChange={(e) => setForm({ ...form, merchant: e.target.value })} />
+          </label>
+          <label className="input-group">
+            <span className="input-label">Notes</span>
+            <input placeholder="Optional memo" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+          </label>
+          <div className="form-actions-row">
+            <button type="submit" className="primary-btn">{editingSpendId ? 'Update spend' : 'Save spend'}</button>
+            {editingSpendId && <button type="button" className="ghost" onClick={resetSpendForm}>Cancel</button>}
+          </div>
+        </form>
+
+        <form className="panel form-panel" onSubmit={saveRecurring}>
+          <div className="panel-header">
+            <h2>{editingRecurringId ? 'Edit Recurring' : 'Recurring Expenses'}</h2>
+          </div>
+          <label className="input-group">
+            <span className="input-label">Name</span>
+            <input placeholder="e.g. Netflix, Gym, Rent" value={recurringForm.name} onChange={(e) => setRecurringForm({ ...recurringForm, name: e.target.value })} required />
+          </label>
+          <label className="input-group">
+            <span className="input-label">Category</span>
+            <input placeholder="e.g. Utilities, Entertainment" value={recurringForm.category} onChange={(e) => setRecurringForm({ ...recurringForm, category: e.target.value })} required />
+          </label>
+          <label className="input-group">
+            <span className="input-label">Amount ($)</span>
+            <input type="number" step="0.01" placeholder="0.00" value={recurringForm.amount} onChange={(e) => setRecurringForm({ ...recurringForm, amount: e.target.value })} required />
+          </label>
+          <label className="input-group">
+            <span className="input-label">Frequency</span>
+            <select value={recurringForm.frequency} onChange={(e) => setRecurringForm({ ...recurringForm, frequency: e.target.value })}>
+              <option value="monthly">Monthly</option>
+              <option value="weekly">Weekly</option>
+              <option value="quarterly">Quarterly</option>
+              <option value="yearly">Yearly</option>
+            </select>
+          </label>
+          <label className="input-group">
+            <span className="input-label">Next Due Date</span>
+            <input type="date" value={recurringForm.next_due_date} onChange={(e) => setRecurringForm({ ...recurringForm, next_due_date: e.target.value })} required />
+          </label>
+          <label className="input-group">
+            <span className="input-label">Notes</span>
+            <textarea placeholder="Notes / details" value={recurringForm.notes} onChange={(e) => setRecurringForm({ ...recurringForm, notes: e.target.value })} rows="2" />
+          </label>
+          <div className="form-actions-row">
+            <button type="submit" className="primary-btn">{editingRecurringId ? 'Update recurring' : 'Save recurring'}</button>
+            {editingRecurringId && <button type="button" className="ghost" onClick={resetRecurringForm}>Cancel</button>}
+          </div>
+        </form>
+
+        <div className="panel form-panel ai-panel">
+          <div className="panel-header">
+            <div className="ai-title-wrap">
+              <span className="sparkle-icon">✨</span>
+              <h2>Gemini Receipt AI</h2>
+            </div>
+          </div>
+          <label className="input-group">
+            <span className="input-label">Date Override (Optional)</span>
+            <input
+              type="month"
+              value={receiptMonth}
+              onChange={(e) => setReceiptMonth(e.target.value)}
+              placeholder="Auto-detect from receipt"
+            />
+            <span className="input-hint">Leave blank to auto-detect the date from the receipt (falls back to today if unreadable)</span>
+          </label>
+          <label className="input-group file-upload-group">
+            <span className="input-label">Receipt Image</span>
+            <input type="file" accept="image/*" onChange={(e) => setReceiptFile(e.target.files?.[0])} />
+          </label>
+          <label className="input-group">
+            <span className="input-label">Extraction Prompt</span>
+            <textarea value={receiptPrompt} rows="3" onChange={(e) => setReceiptPrompt(e.target.value)} />
+          </label>
+          <div className="receipt-actions">
+            <button onClick={analyzeReceipt} disabled={analyzingReceipt} className="ai-btn">
+              {analyzingReceipt ? '✨ Scanning & Analyzing…' : '✨ Analyze Receipt Image'}
+            </button>
+            {analyzingReceipt && <div className="message ai-status">Processing receipt with Gemini Multimodal AI…</div>}
+          </div>
+          {receiptResult && <ReceiptResultView result={receiptResult} />}
+        </div>
+      </section>
+
+      {/* Spend Rows and Recurring Expenses Tables */}
+      <section className="grid two-col">
+        <div className="panel data-panel">
+          <div className="panel-header">
+            <h2>Transactions</h2>
+            <span className="record-count">{filteredSpendRows.length} entries</span>
+          </div>
+          {filteredSpendRows.length === 0 ? (
+            <div className="empty-data-state">
+              <span>🧾</span>
+              <p>No spend rows match your criteria</p>
+            </div>
+          ) : (
+            <ul className="rows-list slim-list">
+              {filteredSpendRows.map((item) => (
+                <li key={item.id} className="transaction-row">
+                  <div className="transaction-main">
+                    <div className="transaction-line1">
+                      <strong className="merchant-name">{item.merchant || 'Unknown Merchant'}</strong>
+                      <span className="category-pill">{item.category}</span>
+                      {item.source === 'receipt_ai' && (
+                        <span className="ai-pill" title="Imported by Gemini AI">✨ AI</span>
+                      )}
+                    </div>
+                    <div className="transaction-line2">
+                      <span className="transaction-date">{item.date}</span>
+                      {item.notes && <span className="transaction-memo">• {item.notes}</span>}
+                    </div>
+                  </div>
+                  <div className="transaction-right">
+                    <strong className="transaction-amount">
+                      ${Number(item.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </strong>
+                    <div className="actions">
+                      <button className="ghost sm-btn" onClick={() => editSpend(item)}>Edit</button>
+                      <button className="ghost sm-btn danger-hover" onClick={() => deleteSpend(item.id)}>Delete</button>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
-      </section>
 
-      <section className="grid two-col">
-        <div className="panel">
-          <h2>Spend rows</h2>
-          <ul className="rows-list slim-list">
-            {filteredSpendRows.map((item) => (
-              <li key={item.id}>
-                <span>{item.category} • {item.merchant || 'Unknown merchant'}</span>
-                <strong>${Number(item.amount).toFixed(2)}</strong>
-                <span className="actions">
-                  <button onClick={() => editSpend(item)}>Edit</button>
-                  <button onClick={() => deleteSpend(item.id)}>Delete</button>
-                </span>
-              </li>
-            ))}
-          </ul>
+        <div className="panel data-panel">
+          <div className="panel-header">
+            <h2>Recurring Expenses</h2>
+            <span className="record-count">{recurring.length} subscriptions</span>
+          </div>
+          {recurring.length === 0 ? (
+            <div className="empty-data-state">
+              <span>🔄</span>
+              <p>No recurring expenses registered</p>
+            </div>
+          ) : (
+            <ul className="rows-list">
+              {recurring.map((item) => (
+                <li key={item.id} className="recurring-row">
+                  <div className="recurring-main">
+                    <div className="recurring-line1">
+                      <strong className="recurring-name">{item.name}</strong>
+                      <span className="frequency-badge">{item.frequency}</span>
+                    </div>
+                    <div className="recurring-line2">
+                      <span className="recurring-cat">{item.category}</span>
+                      <span className="recurring-due">Due: {item.next_due_date}</span>
+                    </div>
+                  </div>
+                  <div className="recurring-right">
+                    <strong className="recurring-amount">
+                      ${Number(item.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </strong>
+                    <div className="actions">
+                      <button className="ghost sm-btn" onClick={() => editRecurring(item)}>Edit</button>
+                      <button className="ghost sm-btn danger-hover" onClick={() => deleteRecurring(item.id)}>Delete</button>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
-      </section>
-
-      <section className="panel">
-        <h2>Recurring expenses</h2>
-        <ul className="rows-list">
-          {recurring.map((item) => (
-            <li key={item.id}>
-              <span>{item.name} ({item.frequency})</span>
-              <strong>${Number(item.amount).toFixed(2)}</strong>
-              <span className="actions">
-                <button onClick={() => editRecurring(item)}>Edit</button>
-                <button onClick={() => deleteRecurring(item.id)}>Delete</button>
-              </span>
-            </li>
-          ))}
-        </ul>
       </section>
     </div>
   );

@@ -37,25 +37,82 @@ def _extract_json_object(raw_text: str) -> dict[str, Any]:
     return payload
 
 
-def _parse_month_date(month_str: str | None) -> date:
-    if not month_str:
-        return datetime.utcnow().date()
-    clean = month_str.strip()
-    try:
-        if len(clean) == 7:
-            return datetime.strptime(f"{clean}-01", "%Y-%m-%d").date()
-        if len(clean) >= 10:
-            return datetime.strptime(clean[:10], "%Y-%m-%d").date()
-    except Exception:
-        pass
-    return datetime.utcnow().date()
+DEFAULT_RECEIPT_SYSTEM_PROMPT = (
+    "You are an expert financial receipt analysis assistant.\n"
+    "Carefully inspect the receipt image and extract transaction data with high precision.\n\n"
+    "Instructions:\n"
+    "1. Date: Find the transaction/purchase date printed on the receipt and format it strictly as ISO 'YYYY-MM-DD' (e.g. '2026-11-15'). If the year is 2 digits, infer the 4-digit year. If no date is visible or legible on the receipt, output null.\n"
+    "2. Merchant: Extract the store, restaurant, vendor, or business name (e.g., 'Target', 'Trader Joe\\'s', 'Shell Gas', 'Costco'). If unreadable, use 'Unknown Merchant'.\n"
+    "3. Line Items: Extract each individual purchased item with its exact name/description, sensible budget category (such as 'Groceries', 'Dining & Food', 'Utilities', 'Transportation', 'Housing', 'Healthcare', 'Entertainment', 'Shopping', 'Personal Care', 'Other'), and numeric price/amount.\n"
+    "4. Adjustments & Discounts: Capture coupons, discounts, returns, or bottle deposits as separate line items with negative amounts (e.g. -1.50).\n"
+    "5. Categories: Return a dictionary mapping each budget category name to its subtotal amount.\n"
+    "6. Total Spend: Extract or calculate the grand total paid on the receipt.\n"
+    "7. Notes: Provide a concise 1-sentence summary of the transaction (e.g., 'Groceries at Trader Joe\\'s').\n\n"
+    "Return ONLY a valid JSON object without markdown fences, explanation, or extra keys.\n"
+    "Required JSON format:\n"
+    "{\n"
+    '  "merchant": "Store Name",\n'
+    '  "date": "YYYY-MM-DD",\n'
+    '  "total_spend": 12.34,\n'
+    '  "categories": {"Groceries": 12.34},\n'
+    '  "line_items": [{"description": "Item Name", "category": "Groceries", "amount": 12.34}],\n'
+    '  "notes": "Short summary"\n'
+    "}"
+)
 
 
-def _save_receipt_line_items(month: str, line_items: list[dict[str, Any]]) -> int:
+def _resolve_receipt_date(
+    detected_date: str | None,
+    month_override: str | None,
+) -> tuple[date, bool]:
+    """
+    Resolves the receipt transaction date:
+    1. Automatically uses date detected on receipt (formatted YYYY-MM-DD).
+    2. Falls back to user-specified date/month override if receipt had no date.
+    3. Falls back to current UTC date if neither is present.
+
+    Returns:
+        (resolved_date, was_detected_from_receipt)
+    """
+    if detected_date:
+        clean_date = str(detected_date).strip()
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(clean_date, fmt).date(), True
+            except ValueError:
+                continue
+        if len(clean_date) >= 10:
+            try:
+                return datetime.strptime(clean_date[:10], "%Y-%m-%d").date(), True
+            except Exception:
+                pass
+
+    if month_override:
+        clean_month = str(month_override).strip()
+        if len(clean_month) == 7:  # YYYY-MM
+            try:
+                return datetime.strptime(f"{clean_month}-01", "%Y-%m-%d").date(), False
+            except Exception:
+                pass
+        elif len(clean_month) >= 10:  # YYYY-MM-DD
+            try:
+                return datetime.strptime(clean_month[:10], "%Y-%m-%d").date(), False
+            except Exception:
+                pass
+
+    return datetime.utcnow().date(), False
+
+
+def _save_receipt_line_items(
+    line_items: list[dict[str, Any]],
+    receipt_date: date,
+    merchant: str = "Receipt Merchant",
+) -> int:
     if not line_items:
         return 0
 
-    row_date = _parse_month_date(month)
+    month_key = receipt_date.strftime("%Y-%m")
+    date_str = receipt_date.isoformat()
     rows = []
     for item in line_items:
         description = (
@@ -65,13 +122,13 @@ def _save_receipt_line_items(month: str, line_items: list[dict[str, Any]]) -> in
         amount = float(item.get("amount") or 0.0)
         rows.append(
             {
-                "date": row_date.isoformat(),
+                "date": date_str,
                 "amount": amount,
                 "category": category,
-                "merchant": description,
-                "notes": f"Receipt import: {description}",
+                "merchant": merchant if merchant and merchant != "Unknown Merchant" else description,
+                "notes": f"Receipt item: {description}",
                 "source": "receipt_ai",
-                "month": month[:7] if (month and len(month) >= 7) else build_month_key(row_date),
+                "month": month_key,
             }
         )
 
@@ -128,24 +185,17 @@ def build_month_key(value: date | str | None) -> str:
 
 
 def analyze_receipt_image(
-    image_data: bytes, mime_type: str, month: str, system_prompt: str
+    image_data: bytes,
+    mime_type: str,
+    month: str | None = None,
+    system_prompt: str | None = None,
 ) -> dict[str, Any]:
     api_key = ensure_gemini_configured()
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("gemini-3.5-flash-lite")
 
-    prompt = (
-        f"{system_prompt}\n\n"
-        "Return ONLY a compact JSON object with no markdown fences, no prose, no comments, and no extra keys.\n"
-        "Use exactly these keys only: total_spend, categories, line_items, notes.\n"
-        "Do not include category_totals, summary, explanation, or any other section.\n"
-        "The categories object must be a map of category names to numeric totals.\n"
-        "The line_items array must contain objects with exactly these keys: description, category, amount.\n"
-        "Keep each original row item, including discounts, refunds, price overrides, and adjustments.\n"
-        "Use negative numbers for discounts and refunds.\n"
-        "Return valid JSON that can be parsed by Python json.loads() without any extra text.\n"
-        'Example: {"total_spend": 4.5, "categories": {"Alcohol & Bars": 4.5}, "line_items": [{"description": "Bulmers Original Bottle", "category": "Alcohol & Bars", "amount": 4.0}, {"description": "Transaction Discount", "category": "Alcohol & Bars", "amount": -0.5}], "notes": "Receipt summary"}'
-    )
+    user_prompt = (system_prompt or "").strip()
+    prompt = user_prompt if user_prompt else DEFAULT_RECEIPT_SYSTEM_PROMPT
 
     image_part = {
         "inline_data": {
@@ -158,6 +208,10 @@ def analyze_receipt_image(
     text = response.text
     payload = _extract_json_object(text)
 
+    detected_date_raw = payload.get("date")
+    merchant = str(payload.get("merchant") or "Receipt Merchant").strip()
+    resolved_date, was_detected = _resolve_receipt_date(detected_date_raw, month)
+
     categories = payload.get("categories", {})
     line_items = payload.get("line_items", [])
     total = float(
@@ -166,10 +220,18 @@ def analyze_receipt_image(
         )
     )
 
-    imported_rows = _save_receipt_line_items(month, line_items)
+    imported_rows = _save_receipt_line_items(
+        line_items=line_items,
+        receipt_date=resolved_date,
+        merchant=merchant,
+    )
 
     return {
+        "merchant": merchant,
+        "date": resolved_date.isoformat(),
+        "date_detected": was_detected,
         "line_items": line_items,
+        "categories": categories,
         "monthly_total": total,
         "notes": payload.get("notes", ""),
         "raw_text": text,

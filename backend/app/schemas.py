@@ -56,7 +56,11 @@ class ReceiptAnalysisRequest(BaseModel):
 
 
 class ReceiptAnalysisResponse(BaseModel):
+    merchant: Optional[str] = None
+    date: Optional[str] = None
+    date_detected: bool = False
     line_items: list[dict]
+    categories: dict[str, float] = {}
     monthly_total: float
     notes: str
     raw_text: str
