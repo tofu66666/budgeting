@@ -41,10 +41,16 @@ def _save_receipt_line_items(month: str, line_items: list[dict[str, Any]]) -> in
     if not line_items:
         return 0
 
-    row_date = datetime.strptime(f"{month}-01", "%Y-%m-%d").date() if month else datetime.utcnow().date()
+    row_date = (
+        datetime.strptime(f"{month}-01", "%Y-%m-%d").date()
+        if month
+        else datetime.utcnow().date()
+    )
     rows = []
     for item in line_items:
-        description = str(item.get("description") or "Receipt item").strip() or "Receipt item"
+        description = (
+            str(item.get("description") or "Receipt item").strip() or "Receipt item"
+        )
         category = str(item.get("category") or "Other").strip() or "Other"
         amount = float(item.get("amount", 0))
         rows.append(
@@ -128,7 +134,7 @@ def analyze_receipt_image(
         "Keep each original row item, including discounts, refunds, price overrides, and adjustments.\n"
         "Use negative numbers for discounts and refunds.\n"
         "Return valid JSON that can be parsed by Python json.loads() without any extra text.\n"
-        "Example: {\"total_spend\": 4.5, \"categories\": {\"Alcohol & Bars\": 4.5}, \"line_items\": [{\"description\": \"Bulmers Original Bottle\", \"category\": \"Alcohol & Bars\", \"amount\": 4.0}, {\"description\": \"Transaction Discount\", \"category\": \"Alcohol & Bars\", \"amount\": -0.5}], \"notes\": \"Receipt summary\"}"
+        'Example: {"total_spend": 4.5, "categories": {"Alcohol & Bars": 4.5}, "line_items": [{"description": "Bulmers Original Bottle", "category": "Alcohol & Bars", "amount": 4.0}, {"description": "Transaction Discount", "category": "Alcohol & Bars", "amount": -0.5}], "notes": "Receipt summary"}'
     )
 
     image_part = {
