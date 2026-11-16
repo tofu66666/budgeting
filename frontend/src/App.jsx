@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import CategoryBarChart from './components/CategoryBarChart';
 import MonthlyLineChart from './components/MonthlyLineChart';
 import ReceiptResultView from './components/ReceiptResultView';
+import { compressImageForUpload } from './utils/imageCompressor';
 
 const API_BASE = '';
 const apiUrl = (path) => `/api${path}`;
@@ -271,19 +272,34 @@ function App() {
       return;
     }
     setAnalyzingReceipt(true);
-    const formData = new FormData();
-    if (receiptMonth) formData.append('month', receiptMonth);
-    if (receiptPrompt) formData.append('system_prompt', receiptPrompt);
-    formData.append('file', receiptFile);
+    setStatus('Optimizing receipt image…');
 
     try {
+      const fileToUpload = await compressImageForUpload(receiptFile);
+
+      const formData = new FormData();
+      if (receiptMonth) formData.append('month', receiptMonth);
+      if (receiptPrompt) formData.append('system_prompt', receiptPrompt);
+      formData.append('file', fileToUpload);
+
+      setStatus('Processing receipt with Gemini AI…');
       const res = await fetch(apiUrl('/receipt/analyze'), {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
       });
       const text = await res.text();
-      if (!res.ok) throw new Error(text || 'Unable to analyze receipt');
+      if (res.status === 413 || text.includes('FUNCTION_PAYLOAD_TOO_LARGE')) {
+        throw new Error('Image exceeds server payload limits (4.5MB). Please upload a smaller photo.');
+      }
+      if (!res.ok) {
+        let errorDetail = text;
+        try {
+          const parsed = JSON.parse(text);
+          errorDetail = parsed.detail || text;
+        } catch {}
+        throw new Error(errorDetail || 'Unable to analyze receipt');
+      }
       const data = JSON.parse(text);
       setReceiptResult(data);
       setStatus(data.imported_rows ? `Receipt analyzed and ${data.imported_rows} spend rows imported` : 'Receipt analyzed successfully');
