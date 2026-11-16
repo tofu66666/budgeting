@@ -6,8 +6,17 @@ import { compressImageForUpload } from './utils/imageCompressor';
 
 const API_BASE = '';
 const apiUrl = (path) => `/api${path}`;
+
+const safeDate = (val) => {
+  if (!val) return new Date();
+  if (val instanceof Date) return isNaN(val.getTime()) ? new Date() : new Date(val);
+  const str = String(val).trim();
+  const d = str.length === 10 ? new Date(`${str}T00:00:00`) : new Date(str);
+  return isNaN(d.getTime()) ? new Date() : d;
+};
+
 const startOfWeek = (value) => {
-  const date = new Date(value);
+  const date = safeDate(value);
   const day = date.getDay();
   const diff = (day === 0 ? -6 : 1) - day;
   date.setDate(date.getDate() + diff);
@@ -16,12 +25,21 @@ const startOfWeek = (value) => {
 };
 
 const addDays = (value, days) => {
-  const date = new Date(value);
+  const date = safeDate(value);
   date.setDate(date.getDate() + days);
   return date;
 };
 
-const formatDateInput = (value) => value.toISOString().slice(0, 10);
+const formatDateInput = (value) => safeDate(value).toISOString().slice(0, 10);
+
+const DEFAULT_RECEIPT_PROMPT = `Analyze this receipt with high precision.
+Extract:
+1. "merchant": Store/vendor name
+2. "date": Transaction date in YYYY-MM-DD format (null if missing)
+3. "grand_total": Total charge paid (float)
+4. "line_items": Every item with item name, quantity, unit_price, total_price, and category (Groceries, Dining & Food, Alcohol & Drinks, Housing, Utilities, Transportation, Shopping, Entertainment, Healthcare, Personal Care, Discounts & Adjustments, Other)
+5. Record coupons or refunds with negative total_price under "Discounts & Adjustments".
+Return strictly valid JSON.`;
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem('budget-token') || '');
@@ -35,6 +53,11 @@ function App() {
   const [anchorDate, setAnchorDate] = useState(formatDateInput(new Date()));
   const [filterTransactionsByChart, setFilterTransactionsByChart] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [apiKeyStatus, setApiKeyStatus] = useState({ has_gemini_api_key: false, gemini_api_key_masked: '' });
+  const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState(localStorage.getItem('budget_gemini_api_key') || '');
+  const [savingApiKey, setSavingApiKey] = useState(false);
+  const [showApiKeyText, setShowApiKeyText] = useState(false);
   const [form, setForm] = useState({
     date: new Date().toISOString().slice(0, 10),
     amount: '',
@@ -54,7 +77,7 @@ function App() {
   });
   const [receiptFile, setReceiptFile] = useState(null);
   const [receiptMonth, setReceiptMonth] = useState('');
-  const [receiptPrompt, setReceiptPrompt] = useState('Extract all receipt items with merchant, transaction date (YYYY-MM-DD), categorized line items, and grand total. If date is not visible on receipt, output null.');
+  const [receiptPrompt, setReceiptPrompt] = useState(DEFAULT_RECEIPT_PROMPT);
   const [analyzingReceipt, setAnalyzingReceipt] = useState(false);
   const [receiptResult, setReceiptResult] = useState(null);
   const [editingSpendId, setEditingSpendId] = useState(null);
@@ -129,10 +152,51 @@ function App() {
     }
   };
 
+  const loadSettings = async () => {
+    if (!token) return;
+    try {
+      const res = await fetch(apiUrl('/settings'), {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setApiKeyStatus(data);
+      }
+    } catch {}
+  };
+
+  const saveApiKey = async (e) => {
+    if (e) e.preventDefault();
+    setSavingApiKey(true);
+    try {
+      const cleanKey = apiKeyInput.trim();
+      if (!cleanKey) throw new Error('Please enter a valid Gemini API key');
+      const res = await fetch(apiUrl('/settings'), {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ gemini_api_key: cleanKey }),
+      });
+      if (!res.ok) throw new Error('Failed to save API key');
+      const data = await res.json();
+      setApiKeyStatus({
+        has_gemini_api_key: data.has_gemini_api_key,
+        gemini_api_key_masked: data.gemini_api_key_masked,
+      });
+      localStorage.setItem('budget_gemini_api_key', cleanKey);
+      setStatus('Gemini API key saved successfully');
+      setApiKeyModalOpen(false);
+    } catch (err) {
+      setStatus(err.message);
+    } finally {
+      setSavingApiKey(false);
+    }
+  };
+
   useEffect(() => {
     if (token) {
       loadDashboard();
       loadAll();
+      loadSettings();
     }
   }, [token]);
 
@@ -279,15 +343,20 @@ function App() {
     try {
       const fileToUpload = await compressImageForUpload(receiptFile);
 
+      const customKey = apiKeyInput.trim() || localStorage.getItem('budget_gemini_api_key') || '';
       const formData = new FormData();
       if (receiptMonth) formData.append('month', receiptMonth);
       if (receiptPrompt) formData.append('system_prompt', receiptPrompt);
+      if (customKey) formData.append('api_key', customKey);
       formData.append('file', fileToUpload);
 
       setStatus('Processing receipt with Gemini AI…');
+      const headers = { Authorization: `Bearer ${token}` };
+      if (customKey) headers['X-Gemini-API-Key'] = customKey;
+
       const res = await fetch(apiUrl('/receipt/analyze'), {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers,
         body: formData,
       });
       const text = await res.text();
@@ -300,6 +369,9 @@ function App() {
           const parsed = JSON.parse(text);
           errorDetail = parsed.detail || text;
         } catch {}
+        if (errorDetail.includes('Gemini API key is missing')) {
+          setApiKeyModalOpen(true);
+        }
         throw new Error(errorDetail || 'Unable to analyze receipt');
       }
       const data = JSON.parse(text);
@@ -315,7 +387,7 @@ function App() {
   };
 
   const handlePrevPeriod = () => {
-    const cur = new Date(`${anchorDate}T00:00:00`);
+    const cur = safeDate(anchorDate);
     if (chartTimeframe === 'day') {
       cur.setDate(cur.getDate() - 1);
     } else if (chartTimeframe === 'week') {
@@ -327,7 +399,7 @@ function App() {
   };
 
   const handleNextPeriod = () => {
-    const cur = new Date(`${anchorDate}T00:00:00`);
+    const cur = safeDate(anchorDate);
     if (chartTimeframe === 'day') {
       cur.setDate(cur.getDate() + 1);
     } else if (chartTimeframe === 'week') {
@@ -344,7 +416,7 @@ function App() {
 
   // Compute aggregated chart data for Day, Week, Month, or All Time
   const chartData = useMemo(() => {
-    const anchor = new Date(`${anchorDate}T00:00:00`);
+    const anchor = safeDate(anchorDate);
     let rangeStart = null;
     let rangeEnd = null;
     let periodLabel = '';
@@ -520,8 +592,6 @@ function App() {
 
   const categoryMap = dashboard?.by_category || {};
   const byMonth = dashboard?.by_month || {};
-  const weekStartDate = startOfWeek(weekFilter);
-  const weekEndDate = addDays(weekStartDate, 6);
 
   return (
     <div className="page app-shell">
@@ -533,9 +603,20 @@ function App() {
             <span className="brand-tagline">Personal spend & AI receipt intelligence</span>
           </div>
         </div>
-        <button className="ghost logout-btn" onClick={logout}>
-          <span>Sign out</span>
-        </button>
+        <div className="topbar-actions">
+          <button
+            type="button"
+            className={`api-key-btn ${apiKeyStatus.has_gemini_api_key ? 'configured' : 'missing'}`}
+            onClick={() => setApiKeyModalOpen(true)}
+            title="Configure Gemini API Key"
+          >
+            <span className="api-key-dot" />
+            <span>🔑 {apiKeyStatus.has_gemini_api_key ? `Gemini: ${apiKeyStatus.gemini_api_key_masked || 'Active'}` : 'Add API Key'}</span>
+          </button>
+          <button className="ghost logout-btn" onClick={logout}>
+            <span>Sign out</span>
+          </button>
+        </div>
       </header>
 
       {status && <div className="message">{status}</div>}
@@ -807,7 +888,28 @@ function App() {
               <span className="sparkle-icon">✨</span>
               <h2>Gemini Receipt AI</h2>
             </div>
+            {!apiKeyStatus.has_gemini_api_key && (
+              <button
+                type="button"
+                className="api-key-btn missing"
+                onClick={() => setApiKeyModalOpen(true)}
+                style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem' }}
+              >
+                <span className="api-key-dot" />
+                <span>API Key Needed</span>
+              </button>
+            )}
           </div>
+          {!apiKeyStatus.has_gemini_api_key && (
+            <div
+              className="api-key-status-banner missing"
+              style={{ marginBottom: '1rem', cursor: 'pointer', display: 'flex', justifyContent: 'space-between' }}
+              onClick={() => setApiKeyModalOpen(true)}
+            >
+              <span>⚠️ Gemini API Key not set. Click here to configure your key.</span>
+              <strong style={{ textDecoration: 'underline' }}>Configure ↗</strong>
+            </div>
+          )}
           <label className="input-group">
             <span className="input-label">Date Override (Optional)</span>
             <input
@@ -823,8 +925,24 @@ function App() {
             <input type="file" accept="image/*" onChange={(e) => setReceiptFile(e.target.files?.[0])} />
           </label>
           <label className="input-group">
-            <span className="input-label">Extraction Prompt</span>
-            <textarea value={receiptPrompt} rows="3" onChange={(e) => setReceiptPrompt(e.target.value)} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <span className="input-label">Extraction Prompt</span>
+              <button
+                type="button"
+                onClick={() => setReceiptPrompt(DEFAULT_RECEIPT_PROMPT)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#38bdf8',
+                  fontSize: '0.75rem',
+                  cursor: 'pointer',
+                  padding: '2px 6px',
+                }}
+              >
+                ↺ Reset Prompt
+              </button>
+            </div>
+            <textarea value={receiptPrompt} rows="4" onChange={(e) => setReceiptPrompt(e.target.value)} />
           </label>
           <div className="receipt-actions">
             <button onClick={analyzeReceipt} disabled={analyzingReceipt} className="ai-btn">
@@ -919,6 +1037,79 @@ function App() {
           )}
         </div>
       </section>
+
+      {apiKeyModalOpen && (
+        <div className="modal-backdrop" onClick={() => setApiKeyModalOpen(false)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>🔑 Gemini API Key</h3>
+              <button type="button" className="modal-close" onClick={() => setApiKeyModalOpen(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className={`api-key-status-banner ${apiKeyStatus.has_gemini_api_key ? 'configured' : 'missing'}`}>
+                <span>{apiKeyStatus.has_gemini_api_key ? '✓' : '⚠️'}</span>
+                <span>
+                  {apiKeyStatus.has_gemini_api_key
+                    ? `Configured key: ${apiKeyStatus.gemini_api_key_masked || 'Active'}`
+                    : 'No API key configured. Enter a Gemini key below to enable receipt scanning.'}
+                </span>
+              </div>
+              <p>
+                Provide your Google Gemini API key to enable OCR and expense categorization via Gemini 3.5 Flash.
+              </p>
+              <form onSubmit={saveApiKey} style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                <label className="input-group">
+                  <span className="input-label">Gemini API Key</span>
+                  <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                    <input
+                      type={showApiKeyText ? 'text' : 'password'}
+                      value={apiKeyInput}
+                      onChange={(e) => setApiKeyInput(e.target.value)}
+                      placeholder="AIzaSy..."
+                      required
+                      style={{ width: '100%', paddingRight: '4rem' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowApiKeyText(!showApiKeyText)}
+                      style={{
+                        position: 'absolute',
+                        right: '8px',
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#94a3b8',
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                        padding: '4px 6px',
+                      }}
+                    >
+                      {showApiKeyText ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                </label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.25rem' }}>
+                  <a
+                    href="https://aistudio.google.com/app/apikey"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="api-key-link"
+                  >
+                    Get free Gemini API key ↗
+                  </a>
+                  <div className="modal-actions">
+                    <button type="button" className="ghost" onClick={() => setApiKeyModalOpen(false)}>
+                      Cancel
+                    </button>
+                    <button type="submit" className="primary-btn" disabled={savingApiKey}>
+                      {savingApiKey ? 'Saving…' : 'Save Key'}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
