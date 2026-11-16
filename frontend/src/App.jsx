@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
-const apiUrl = (path) => `${API_BASE}/api${path}`;
+const API_BASE = '';
+const apiUrl = (path) => `/api${path}`;
 const startOfWeek = (value) => {
   const date = new Date(value);
   const day = date.getDay();
