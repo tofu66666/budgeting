@@ -28,9 +28,8 @@ def get_password_hash(password: str) -> str:
 
 
 def create_access_token(username: str) -> str:
-    expires_delta = timedelta(hours=8)
-    expire = datetime.now(timezone.utc) + expires_delta
-    payload = {"sub": username, "exp": expire}
+    # Token never expires — sessions last until the user logs out
+    payload = {"sub": username}
     return jwt.encode(payload, settings.app_secret, algorithm=ALGORITHM)
 
 
@@ -83,10 +82,37 @@ def _authenticate_bearer_token(raw_header: str) -> Optional[BudgetUser]:
         return None
     token = raw_header.replace("Bearer ", "", 1)
     try:
-        payload = jwt.decode(token, settings.app_secret, algorithms=[ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.app_secret,
+            algorithms=[ALGORITHM],
+            options={"verify_exp": False},
+        )
     except JWTError:
         return None
     username = payload.get("sub")
+    if not username:
+        return None
+    # Look up in DB first
+    try:
+        client = get_supabase_client()
+        result = (
+            client.table("budget_users")
+            .select("*")
+            .eq("username", username)
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            user_data = result.data[0]
+            return BudgetUser(
+                id=user_data.get("id", 1),
+                username=user_data["username"],
+                password_hash=user_data.get("password_hash", ""),
+                is_admin=user_data.get("is_admin", True),
+            )
+    except Exception:
+        pass
     if username == ADMIN_USERNAME:
         return BudgetUser(
             id=1,

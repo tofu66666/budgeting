@@ -3,8 +3,8 @@ import CategoryBarChart from './components/CategoryBarChart';
 import MonthlyLineChart from './components/MonthlyLineChart';
 import ReceiptResultView from './components/ReceiptResultView';
 import { compressImageForUpload } from './utils/imageCompressor';
+import { getTranslator, getCategoryOptions, CATEGORY_VALUES_EN } from './i18n';
 
-const API_BASE = '';
 const apiUrl = (path) => `/api${path}`;
 
 const safeDate = (val) => {
@@ -37,9 +37,26 @@ Extract:
 1. "merchant": Store/vendor name
 2. "date": Transaction date in YYYY-MM-DD format (null if missing)
 3. "grand_total": Total charge paid (float)
-4. "line_items": Every item with item name, quantity, unit_price, total_price, and category (Groceries, Dining & Food, Alcohol & Drinks, Housing, Utilities, Transportation, Shopping, Entertainment, Healthcare, Personal Care, Discounts & Adjustments, Other)
+4. "line_items": Every item with item name, quantity, unit_price, total_price, and category (Groceries, Dining Out, Alcohol & Drinks, Housing, Utilities, Transportation, Shopping, Entertainment, Healthcare, Personal Care, Furniture, Luxury, Discounts & Adjustments, Other)
 5. Record coupons or refunds with negative total_price under "Discounts & Adjustments".
 Return strictly valid JSON.`;
+
+function CollapsibleSection({ title, icon, defaultOpen = false, children, badge, className = '' }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className={`collapsible-section ${className}`}>
+      <button type="button" className="collapsible-header" onClick={() => setOpen(!open)}>
+        <div className="collapsible-title-group">
+          {icon && <span className="collapsible-icon">{icon}</span>}
+          <span className="collapsible-title">{title}</span>
+          {badge && <span className="collapsible-badge">{badge}</span>}
+        </div>
+        <span className={`collapsible-arrow ${open ? 'open' : ''}`}>▾</span>
+      </button>
+      {open && <div className="collapsible-body">{children}</div>}
+    </div>
+  );
+}
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem('budget-token') || '');
@@ -58,10 +75,11 @@ function App() {
   const [apiKeyInput, setApiKeyInput] = useState(localStorage.getItem('budget_gemini_api_key') || '');
   const [savingApiKey, setSavingApiKey] = useState(false);
   const [showApiKeyText, setShowApiKeyText] = useState(false);
+  const [lang, setLang] = useState(localStorage.getItem('budget-lang') || 'en');
   const [form, setForm] = useState({
     date: new Date().toISOString().slice(0, 10),
     amount: '',
-    category: 'Housing',
+    category: 'Groceries',
     merchant: '',
     notes: '',
     source: 'manual',
@@ -83,11 +101,19 @@ function App() {
   const [editingSpendId, setEditingSpendId] = useState(null);
   const [editingRecurringId, setEditingRecurringId] = useState(null);
 
+  const t = useMemo(() => getTranslator(lang), [lang]);
+  const categoryOptions = useMemo(() => getCategoryOptions(lang), [lang]);
+
+  const switchLang = (newLang) => {
+    setLang(newLang);
+    localStorage.setItem('budget-lang', newLang);
+  };
+
   const resetSpendForm = () => {
     setForm({
       date: new Date().toISOString().slice(0, 10),
       amount: '',
-      category: 'Housing',
+      category: 'Groceries',
       merchant: '',
       notes: '',
       source: 'manual',
@@ -120,10 +146,7 @@ function App() {
       const res = await fetch(apiUrl('/dashboard'), {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.status === 401) {
-        logout();
-        return;
-      }
+      if (res.status === 401) { logout(); return; }
       if (!res.ok) throw new Error('Unable to load dashboard');
       const data = await res.json();
       setDashboard(data);
@@ -141,10 +164,7 @@ function App() {
         fetch(apiUrl('/spend'), { headers: { Authorization: `Bearer ${token}` } }),
         fetch(apiUrl('/recurring'), { headers: { Authorization: `Bearer ${token}` } }),
       ]);
-      if (spendRes.status === 401 || recurringRes.status === 401) {
-        logout();
-        return;
-      }
+      if (spendRes.status === 401 || recurringRes.status === 401) { logout(); return; }
       if (spendRes.ok) setSpendRows(await spendRes.json());
       if (recurringRes.ok) setRecurring(await recurringRes.json());
     } catch (err) {
@@ -170,20 +190,20 @@ function App() {
     setSavingApiKey(true);
     try {
       const cleanKey = apiKeyInput.trim();
-      if (!cleanKey) throw new Error('Please enter a valid Gemini API key');
+      if (!cleanKey) throw new Error(t('enterValidKey'));
       const res = await fetch(apiUrl('/settings'), {
         method: 'POST',
         headers: authHeaders,
         body: JSON.stringify({ gemini_api_key: cleanKey }),
       });
-      if (!res.ok) throw new Error('Failed to save API key');
+      if (!res.ok) throw new Error(t('failedSaveKey'));
       const data = await res.json();
       setApiKeyStatus({
         has_gemini_api_key: data.has_gemini_api_key,
         gemini_api_key_masked: data.gemini_api_key_masked,
       });
       localStorage.setItem('budget_gemini_api_key', cleanKey);
-      setStatus('Gemini API key saved successfully');
+      setStatus(t('keySaved'));
       setApiKeyModalOpen(false);
     } catch (err) {
       setStatus(err.message);
@@ -215,7 +235,7 @@ function App() {
       const data = await res.json();
       setToken(data.access_token);
       localStorage.setItem('budget-token', data.access_token);
-      setStatus('Logged in successfully');
+      setStatus(t('loggedIn'));
     } catch (err) {
       setStatus(err.message);
     } finally {
@@ -229,19 +249,15 @@ function App() {
       const payload = { ...form, amount: Number(form.amount) };
       const method = editingSpendId ? 'PUT' : 'POST';
       const url = editingSpendId ? apiUrl(`/spend/${editingSpendId}`) : apiUrl('/spend');
-      const res = await fetch(url, {
-        method,
-        headers: authHeaders,
-        body: JSON.stringify(payload),
-      });
+      const res = await fetch(url, { method, headers: authHeaders, body: JSON.stringify(payload) });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || (editingSpendId ? 'Unable to update spend' : 'Unable to save spend'));
+        throw new Error(errData.detail || (editingSpendId ? t('updateSpend') : t('saveSpend')));
       }
       resetSpendForm();
       await loadDashboard();
       await loadAll();
-      setStatus(editingSpendId ? 'Spend updated' : 'Spend row added');
+      setStatus(editingSpendId ? t('spendUpdated') : t('spendAdded'));
     } catch (err) {
       setStatus(err.message);
     }
@@ -249,10 +265,7 @@ function App() {
 
   const deleteSpend = async (id) => {
     try {
-      const res = await fetch(apiUrl(`/spend/${id}`), {
-        method: 'DELETE',
-        headers: authHeaders,
-      });
+      const res = await fetch(apiUrl(`/spend/${id}`), { method: 'DELETE', headers: authHeaders });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.detail || 'Unable to delete spend');
@@ -260,7 +273,7 @@ function App() {
       if (editingSpendId === id) resetSpendForm();
       await loadDashboard();
       await loadAll();
-      setStatus('Spend row deleted');
+      setStatus(t('spendDeleted'));
     } catch (err) {
       setStatus(err.message);
     }
@@ -271,7 +284,7 @@ function App() {
     setForm({
       date: item.date || new Date().toISOString().slice(0, 10),
       amount: String(item.amount),
-      category: item.category || 'Housing',
+      category: item.category || 'Groceries',
       merchant: item.merchant || '',
       notes: item.notes || '',
       source: item.source || 'manual',
@@ -284,18 +297,14 @@ function App() {
       const payload = { ...recurringForm, amount: Number(recurringForm.amount) };
       const method = editingRecurringId ? 'PUT' : 'POST';
       const url = editingRecurringId ? apiUrl(`/recurring/${editingRecurringId}`) : apiUrl('/recurring');
-      const res = await fetch(url, {
-        method,
-        headers: authHeaders,
-        body: JSON.stringify(payload),
-      });
+      const res = await fetch(url, { method, headers: authHeaders, body: JSON.stringify(payload) });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || (editingRecurringId ? 'Unable to update recurring expense' : 'Unable to save recurring expense'));
+        throw new Error(errData.detail || (editingRecurringId ? t('recurringUpdated') : t('recurringCreated')));
       }
       resetRecurringForm();
       await loadAll();
-      setStatus(editingRecurringId ? 'Recurring expense updated' : 'Recurring expense saved');
+      setStatus(editingRecurringId ? t('recurringUpdated') : t('recurringCreated'));
     } catch (err) {
       setStatus(err.message);
     }
@@ -303,17 +312,14 @@ function App() {
 
   const deleteRecurring = async (id) => {
     try {
-      const res = await fetch(apiUrl(`/recurring/${id}`), {
-        method: 'DELETE',
-        headers: authHeaders,
-      });
+      const res = await fetch(apiUrl(`/recurring/${id}`), { method: 'DELETE', headers: authHeaders });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.detail || 'Unable to delete recurring expense');
       }
       if (editingRecurringId === id) resetRecurringForm();
       await loadAll();
-      setStatus('Recurring expense deleted');
+      setStatus(t('recurringDeleted'));
     } catch (err) {
       setStatus(err.message);
     }
@@ -333,50 +339,34 @@ function App() {
   };
 
   const analyzeReceipt = async () => {
-    if (!receiptFile) {
-      setStatus('Choose a receipt image first');
-      return;
-    }
+    if (!receiptFile) { setStatus(t('chooseImage')); return; }
     setAnalyzingReceipt(true);
-    setStatus('Optimizing receipt image…');
-
+    setStatus(t('optimizing'));
     try {
       const fileToUpload = await compressImageForUpload(receiptFile);
-
       const customKey = apiKeyInput.trim() || localStorage.getItem('budget_gemini_api_key') || '';
       const formData = new FormData();
       if (receiptMonth) formData.append('month', receiptMonth);
       if (receiptPrompt) formData.append('system_prompt', receiptPrompt);
       if (customKey) formData.append('api_key', customKey);
       formData.append('file', fileToUpload);
-
-      setStatus('Processing receipt with Gemini AI…');
+      setStatus(t('processingGemini'));
       const headers = { Authorization: `Bearer ${token}` };
       if (customKey) headers['X-Gemini-API-Key'] = customKey;
-
-      const res = await fetch(apiUrl('/receipt/analyze'), {
-        method: 'POST',
-        headers,
-        body: formData,
-      });
+      const res = await fetch(apiUrl('/receipt/analyze'), { method: 'POST', headers, body: formData });
       const text = await res.text();
       if (res.status === 413 || text.includes('FUNCTION_PAYLOAD_TOO_LARGE')) {
-        throw new Error('Image exceeds server payload limits (4.5MB). Please upload a smaller photo.');
+        throw new Error(t('imageTooLarge'));
       }
       if (!res.ok) {
         let errorDetail = text;
-        try {
-          const parsed = JSON.parse(text);
-          errorDetail = parsed.detail || text;
-        } catch {}
-        if (errorDetail.includes('Gemini API key is missing')) {
-          setApiKeyModalOpen(true);
-        }
+        try { const parsed = JSON.parse(text); errorDetail = parsed.detail || text; } catch {}
+        if (errorDetail.includes('Gemini API key is missing')) { setApiKeyModalOpen(true); }
         throw new Error(errorDetail || 'Unable to analyze receipt');
       }
       const data = JSON.parse(text);
       setReceiptResult(data);
-      setStatus(data.imported_rows ? `Receipt analyzed and ${data.imported_rows} spend rows imported` : 'Receipt analyzed successfully');
+      setStatus(data.imported_rows ? t('receiptImported', { count: data.imported_rows }) : t('receiptAnalyzed'));
       await loadDashboard();
       await loadAll();
     } catch (err) {
@@ -388,142 +378,73 @@ function App() {
 
   const handlePrevPeriod = () => {
     const cur = safeDate(anchorDate);
-    if (chartTimeframe === 'day') {
-      cur.setDate(cur.getDate() - 1);
-    } else if (chartTimeframe === 'week') {
-      cur.setDate(cur.getDate() - 7);
-    } else if (chartTimeframe === 'month') {
-      cur.setMonth(cur.getMonth() - 1);
-    }
+    if (chartTimeframe === 'day') cur.setDate(cur.getDate() - 1);
+    else if (chartTimeframe === 'week') cur.setDate(cur.getDate() - 7);
+    else if (chartTimeframe === 'month') cur.setMonth(cur.getMonth() - 1);
     setAnchorDate(formatDateInput(cur));
   };
 
   const handleNextPeriod = () => {
     const cur = safeDate(anchorDate);
-    if (chartTimeframe === 'day') {
-      cur.setDate(cur.getDate() + 1);
-    } else if (chartTimeframe === 'week') {
-      cur.setDate(cur.getDate() + 7);
-    } else if (chartTimeframe === 'month') {
-      cur.setMonth(cur.getMonth() + 1);
-    }
+    if (chartTimeframe === 'day') cur.setDate(cur.getDate() + 1);
+    else if (chartTimeframe === 'week') cur.setDate(cur.getDate() + 7);
+    else if (chartTimeframe === 'month') cur.setMonth(cur.getMonth() + 1);
     setAnchorDate(formatDateInput(cur));
   };
 
-  const handleToday = () => {
-    setAnchorDate(formatDateInput(new Date()));
-  };
+  const handleToday = () => { setAnchorDate(formatDateInput(new Date())); };
 
-  // Compute aggregated chart data for Day, Week, Month, or All Time
   const chartData = useMemo(() => {
     const anchor = safeDate(anchorDate);
-    let rangeStart = null;
-    let rangeEnd = null;
-    let periodLabel = '';
-    let trendUnit = 'day';
+    let rangeStart = null, rangeEnd = null, periodLabel = '', trendUnit = 'day';
     const trendMap = {};
 
     if (chartTimeframe === 'day') {
       trendUnit = 'day';
       rangeStart = formatDateInput(anchor);
       rangeEnd = rangeStart;
-      periodLabel = anchor.toLocaleDateString(undefined, {
-        weekday: 'short',
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-      });
-
-      // Show 7 days ending on anchor date
-      for (let i = 6; i >= 0; i--) {
-        const d = addDays(anchor, -i);
-        trendMap[formatDateInput(d)] = 0;
-      }
+      periodLabel = anchor.toLocaleDateString(lang === 'zh' ? 'zh-CN' : undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+      for (let i = 6; i >= 0; i--) { const d = addDays(anchor, -i); trendMap[formatDateInput(d)] = 0; }
     } else if (chartTimeframe === 'week') {
       trendUnit = 'day';
       const wStart = startOfWeek(anchorDate);
       const wEnd = addDays(wStart, 6);
       rangeStart = formatDateInput(wStart);
       rangeEnd = formatDateInput(wEnd);
-      periodLabel = `${wStart.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${wEnd.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
-
-      // 7 days of this week
-      for (let i = 0; i < 7; i++) {
-        const d = addDays(wStart, i);
-        trendMap[formatDateInput(d)] = 0;
-      }
+      const locale = lang === 'zh' ? 'zh-CN' : undefined;
+      periodLabel = `${wStart.toLocaleDateString(locale, { month: 'short', day: 'numeric' })} – ${wEnd.toLocaleDateString(locale, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+      for (let i = 0; i < 7; i++) { const d = addDays(wStart, i); trendMap[formatDateInput(d)] = 0; }
     } else if (chartTimeframe === 'month') {
       trendUnit = 'month';
-      const y = anchor.getFullYear();
-      const m = anchor.getMonth();
-      const mStart = new Date(y, m, 1);
-      const mEnd = new Date(y, m + 1, 0);
+      const y = anchor.getFullYear(), m = anchor.getMonth();
+      const mStart = new Date(y, m, 1), mEnd = new Date(y, m + 1, 0);
       rangeStart = formatDateInput(mStart);
       rangeEnd = formatDateInput(mEnd);
-      periodLabel = anchor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-
-      // Past 6 months ending in anchor month
-      for (let i = 5; i >= 0; i--) {
-        const d = new Date(y, m - i, 1);
-        const mKey = d.toISOString().slice(0, 7);
-        trendMap[mKey] = 0;
-      }
+      periodLabel = anchor.toLocaleDateString(lang === 'zh' ? 'zh-CN' : undefined, { month: 'long', year: 'numeric' });
+      for (let i = 5; i >= 0; i--) { const d = new Date(y, m - i, 1); trendMap[d.toISOString().slice(0, 7)] = 0; }
     } else {
       trendUnit = 'month';
-      periodLabel = 'All Time';
+      periodLabel = t('allTime');
     }
 
     const categoryTotals = {};
     let periodTotal = 0;
-
     for (const row of spendRows) {
-      const rowDate = row.date || '';
-      const amount = Number(row.amount) || 0;
-      const cat = row.category || 'Other';
-      const rowMonth = rowDate.slice(0, 7);
-
-      const inRange =
-        chartTimeframe === 'all' ||
-        (rangeStart && rangeEnd && rowDate >= rangeStart && rowDate <= rangeEnd);
-
-      if (inRange) {
-        categoryTotals[cat] = (categoryTotals[cat] || 0) + amount;
-        periodTotal += amount;
-      }
-
-      if (chartTimeframe === 'day' || chartTimeframe === 'week') {
-        if (rowDate in trendMap) {
-          trendMap[rowDate] = (trendMap[rowDate] || 0) + amount;
-        }
-      } else if (chartTimeframe === 'month') {
-        if (rowMonth in trendMap) {
-          trendMap[rowMonth] = (trendMap[rowMonth] || 0) + amount;
-        }
-      } else if (chartTimeframe === 'all') {
-        if (rowMonth) {
-          trendMap[rowMonth] = (trendMap[rowMonth] || 0) + amount;
-        }
-      }
+      const rowDate = row.date || '', amount = Number(row.amount) || 0, cat = row.category || 'Other', rowMonth = rowDate.slice(0, 7);
+      const inRange = chartTimeframe === 'all' || (rangeStart && rangeEnd && rowDate >= rangeStart && rowDate <= rangeEnd);
+      if (inRange) { categoryTotals[cat] = (categoryTotals[cat] || 0) + amount; periodTotal += amount; }
+      if (chartTimeframe === 'day' || chartTimeframe === 'week') { if (rowDate in trendMap) trendMap[rowDate] = (trendMap[rowDate] || 0) + amount; }
+      else if (chartTimeframe === 'month') { if (rowMonth in trendMap) trendMap[rowMonth] = (trendMap[rowMonth] || 0) + amount; }
+      else if (chartTimeframe === 'all') { if (rowMonth) trendMap[rowMonth] = (trendMap[rowMonth] || 0) + amount; }
     }
-
     if (chartTimeframe === 'all' && dashboard?.by_month) {
       for (const [mKey, amt] of Object.entries(dashboard.by_month)) {
         trendMap[mKey] = Math.max(trendMap[mKey] || 0, Number(amt) || 0);
       }
     }
+    return { categoryTotals, trendMap, periodLabel, periodTotal, trendUnit, rangeStart, rangeEnd };
+  }, [spendRows, dashboard, chartTimeframe, anchorDate, lang]);
 
-    return {
-      categoryTotals,
-      trendMap,
-      periodLabel,
-      periodTotal,
-      trendUnit,
-      rangeStart,
-      rangeEnd,
-    };
-  }, [spendRows, dashboard, chartTimeframe, anchorDate]);
-
-  // All hooks must be called before any early return (React rules of hooks)
   const filteredSpendRows = useMemo(() => {
     let rows = spendRows;
     if (filterTransactionsByChart && chartTimeframe !== 'all' && chartData.rangeStart && chartData.rangeEnd) {
@@ -531,17 +452,22 @@ function App() {
     }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
-      rows = rows.filter(
-        (item) =>
-          (item.merchant || '').toLowerCase().includes(q) ||
-          (item.category || '').toLowerCase().includes(q) ||
-          (item.notes || '').toLowerCase().includes(q)
+      rows = rows.filter((item) =>
+        (item.merchant || '').toLowerCase().includes(q) ||
+        (item.category || '').toLowerCase().includes(q) ||
+        (item.notes || '').toLowerCase().includes(q)
       );
     }
     return rows;
   }, [spendRows, filterTransactionsByChart, chartTimeframe, chartData, searchQuery]);
 
   const filteredSpendTotal = filteredSpendRows.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+  // Translate a category value from DB (English) to current language for display
+  const displayCategory = (catEnglish) => {
+    const opt = categoryOptions.find(o => o.value === catEnglish);
+    return opt ? opt.label : catEnglish;
+  };
 
   const logout = () => {
     localStorage.removeItem('budget-token');
@@ -557,33 +483,28 @@ function App() {
         <form className="panel login-panel" onSubmit={(e) => { e.preventDefault(); loginUser(); }}>
           <div className="login-header">
             <div className="login-logo">💰</div>
-            <h1>Budget AI Dashboard</h1>
-            <p className="login-subtitle">Sign in to track spend & analyze receipts</p>
+            <h1>{t('loginTitle')}</h1>
+            <p className="login-subtitle">{t('loginSubtitle')}</p>
           </div>
           <div className="login-inputs">
             <label className="input-group">
-              <span className="input-label">Username</span>
-              <input
-                placeholder="Account name"
-                value={login.username}
-                onChange={(e) => setLogin({ ...login, username: e.target.value })}
-                required
-              />
+              <span className="input-label">{t('username')}</span>
+              <input placeholder={t('accountName')} value={login.username} onChange={(e) => setLogin({ ...login, username: e.target.value })} required />
             </label>
             <label className="input-group">
-              <span className="input-label">Password</span>
-              <input
-                type="password"
-                placeholder="Access key"
-                value={login.password}
-                onChange={(e) => setLogin({ ...login, password: e.target.value })}
-                required
-              />
+              <span className="input-label">{t('password')}</span>
+              <input type="password" placeholder={t('accessKey')} value={login.password} onChange={(e) => setLogin({ ...login, password: e.target.value })} required />
             </label>
           </div>
           <button type="submit" className="primary-btn" disabled={loading}>
-            {loading ? 'Signing in…' : 'Sign in'}
+            {loading ? t('signingIn') : t('signIn')}
           </button>
+          <div className="lang-switcher-login">
+            <select value={lang} onChange={(e) => switchLang(e.target.value)} className="lang-select">
+              <option value="en">English</option>
+              <option value="zh">中文</option>
+            </select>
+          </div>
           {status && <div className="message">{status}</div>}
         </form>
       </div>
@@ -591,7 +512,6 @@ function App() {
   }
 
   const categoryMap = dashboard?.by_category || {};
-  const byMonth = dashboard?.by_month || {};
 
   return (
     <div className="page app-shell">
@@ -599,136 +519,193 @@ function App() {
         <div className="brand-group">
           <span className="brand-icon">💰</span>
           <div>
-            <h1>Budget Dashboard</h1>
-            <span className="brand-tagline">Personal spend & AI receipt intelligence</span>
+            <h1>{t('appTitle')}</h1>
+            <span className="brand-tagline">{t('appTagline')}</span>
           </div>
         </div>
         <div className="topbar-actions">
+          <select value={lang} onChange={(e) => switchLang(e.target.value)} className="lang-select" title={t('language')}>
+            <option value="en">EN</option>
+            <option value="zh">中文</option>
+          </select>
           <button
             type="button"
             className={`api-key-btn ${apiKeyStatus.has_gemini_api_key ? 'configured' : 'missing'}`}
             onClick={() => setApiKeyModalOpen(true)}
-            title="Configure Gemini API Key"
+            title={t('geminiApiKey')}
           >
             <span className="api-key-dot" />
-            <span>🔑 {apiKeyStatus.has_gemini_api_key ? `Gemini: ${apiKeyStatus.gemini_api_key_masked || 'Active'}` : 'Add API Key'}</span>
+            <span>🔑 {apiKeyStatus.has_gemini_api_key ? (apiKeyStatus.gemini_api_key_masked || 'Active') : t('addApiKey')}</span>
           </button>
           <button className="ghost logout-btn" onClick={logout}>
-            <span>Sign out</span>
+            <span>{t('signOut')}</span>
           </button>
         </div>
       </header>
 
       {status && <div className="message">{status}</div>}
 
+      {/* Collapsible: Add Spend Row */}
+      <section className="collapsible-wrapper">
+        <CollapsibleSection
+          title={editingSpendId ? t('editSpendRow') : t('addSpendRow')}
+          icon="➕"
+          defaultOpen={!!editingSpendId}
+        >
+          <form className="collapsible-form" onSubmit={addSpend}>
+            <div className="form-grid">
+              <label className="input-group">
+                <span className="input-label">{t('date')}</span>
+                <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required />
+              </label>
+              <label className="input-group">
+                <span className="input-label">{t('amount')}</span>
+                <input type="number" step="0.01" placeholder="0.00" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
+              </label>
+              <label className="input-group">
+                <span className="input-label">{t('category')}</span>
+                <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} required>
+                  {categoryOptions.map(opt => (
+                    <option key={opt.key} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="input-group">
+                <span className="input-label">{t('merchant')}</span>
+                <input placeholder={t('merchantPlaceholder')} value={form.merchant} onChange={(e) => setForm({ ...form, merchant: e.target.value })} />
+              </label>
+              <label className="input-group span-2">
+                <span className="input-label">{t('notes')}</span>
+                <input placeholder={t('optionalMemo')} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+              </label>
+            </div>
+            <div className="form-actions-row">
+              <button type="submit" className="primary-btn">{editingSpendId ? t('updateSpend') : t('saveSpend')}</button>
+              {editingSpendId && <button type="button" className="ghost" onClick={resetSpendForm}>{t('cancel')}</button>}
+            </div>
+          </form>
+        </CollapsibleSection>
+      </section>
+
+      {/* Collapsible: Receipt AI */}
+      <section className="collapsible-wrapper">
+        <CollapsibleSection
+          title={t('receiptAI')}
+          icon="✨"
+          className="ai-collapsible"
+        >
+          <div className="collapsible-form">
+            {!apiKeyStatus.has_gemini_api_key && (
+              <div className="api-key-status-banner missing" style={{ cursor: 'pointer' }} onClick={() => setApiKeyModalOpen(true)}>
+                <span>{t('apiKeyNotSet')}</span>
+                <strong style={{ textDecoration: 'underline' }}>{t('configure')}</strong>
+              </div>
+            )}
+            <div className="form-grid">
+              <label className="input-group">
+                <span className="input-label">{t('dateOverride')}</span>
+                <input type="month" value={receiptMonth} onChange={(e) => setReceiptMonth(e.target.value)} placeholder={t('autoDetect')} />
+                <span className="input-hint">{t('dateHint')}</span>
+              </label>
+              <label className="input-group file-upload-group">
+                <span className="input-label">{t('receiptImage')}</span>
+                <input type="file" accept="image/*" onChange={(e) => setReceiptFile(e.target.files?.[0])} />
+              </label>
+            </div>
+            <label className="input-group">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                <span className="input-label">{t('extractionPrompt')}</span>
+                <button type="button" onClick={() => setReceiptPrompt(DEFAULT_RECEIPT_PROMPT)}
+                  style={{ background: 'transparent', border: 'none', color: '#38bdf8', fontSize: '0.75rem', cursor: 'pointer', padding: '2px 6px' }}>
+                  {t('resetPrompt')}
+                </button>
+              </div>
+              <textarea value={receiptPrompt} rows="3" onChange={(e) => setReceiptPrompt(e.target.value)} />
+            </label>
+            <div className="receipt-actions">
+              <button onClick={analyzeReceipt} disabled={analyzingReceipt} className="ai-btn">
+                {analyzingReceipt ? t('scanning') : t('analyzeReceipt')}
+              </button>
+              {analyzingReceipt && <div className="message ai-status">{t('processingAI')}</div>}
+            </div>
+            {receiptResult && <ReceiptResultView result={receiptResult} />}
+          </div>
+        </CollapsibleSection>
+      </section>
+
+      {/* Stats Cards */}
       <section className="grid stats-grid">
         <div className="card highlight">
           <div className="card-top">
-            <span>Total Spend</span>
+            <span>{t('totalSpend')}</span>
             <span className="card-icon">💳</span>
           </div>
           <strong>${Number(dashboard?.total_spend || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
-          <span className="card-footnote">Across all recorded transactions</span>
+          <span className="card-footnote">{t('acrossAll')}</span>
         </div>
         <div className="card">
           <div className="card-top">
-            <span>Recurring Obligations</span>
+            <span>{t('recurringObligations')}</span>
             <span className="card-icon">🔄</span>
           </div>
           <strong>${Number(dashboard?.recurring_total || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
-          <span className="card-footnote">{recurring.filter(r => r.is_active).length} active subscriptions</span>
+          <span className="card-footnote">{t('activeSubscriptions', { count: recurring.filter(r => r.is_active).length })}</span>
         </div>
         <div className="card">
           <div className="card-top">
-            <span>Active Categories</span>
+            <span>{t('activeCategories')}</span>
             <span className="card-icon">🏷️</span>
           </div>
           <strong>{Object.keys(categoryMap).length}</strong>
-          <span className="card-footnote">Tracked expense groups</span>
+          <span className="card-footnote">{t('trackedGroups')}</span>
         </div>
       </section>
 
-      {/* Timeframe & Chart Granularity Bar */}
+      {/* Timeframe & Chart Granularity */}
       <section className="panel timeframe-control-panel">
         <div className="timeframe-bar">
           <div className="timeframe-segment">
-            <span className="timeframe-label">Filter View:</span>
+            <span className="timeframe-label">{t('filterView')}</span>
             <div className="timeframe-buttons">
-              <button
-                type="button"
-                className={`ghost pill-btn ${chartTimeframe === 'day' ? 'active' : ''}`}
-                onClick={() => setChartTimeframe('day')}
-              >
-                Day
-              </button>
-              <button
-                type="button"
-                className={`ghost pill-btn ${chartTimeframe === 'week' ? 'active' : ''}`}
-                onClick={() => setChartTimeframe('week')}
-              >
-                Week
-              </button>
-              <button
-                type="button"
-                className={`ghost pill-btn ${chartTimeframe === 'month' ? 'active' : ''}`}
-                onClick={() => setChartTimeframe('month')}
-              >
-                Month
-              </button>
-              <button
-                type="button"
-                className={`ghost pill-btn ${chartTimeframe === 'all' ? 'active' : ''}`}
-                onClick={() => setChartTimeframe('all')}
-              >
-                All Time
-              </button>
+              {['day', 'week', 'month', 'all'].map(tf => (
+                <button key={tf} type="button"
+                  className={`ghost pill-btn ${chartTimeframe === tf ? 'active' : ''}`}
+                  onClick={() => setChartTimeframe(tf)}>
+                  {t(tf === 'all' ? 'allTime' : tf)}
+                </button>
+              ))}
             </div>
           </div>
-
           <div className="timeframe-nav">
             {chartTimeframe !== 'all' ? (
               <>
-                <button type="button" className="ghost nav-arrow-btn" onClick={handlePrevPeriod} title="Previous period">
-                  ◀
-                </button>
+                <button type="button" className="ghost nav-arrow-btn" onClick={handlePrevPeriod} title={t('previousPeriod')}>◀</button>
                 <div className="timeframe-period-badge">
                   <span className="period-icon">📅</span>
                   <strong>{chartData.periodLabel}</strong>
                 </div>
-                <button type="button" className="ghost nav-arrow-btn" onClick={handleNextPeriod} title="Next period">
-                  ▶
-                </button>
-                <button type="button" className="ghost today-pill-btn" onClick={handleToday}>
-                  Today
-                </button>
-                <input
-                  type="date"
-                  value={anchorDate}
-                  onChange={(e) => setAnchorDate(e.target.value)}
-                  className="date-direct-picker"
-                  title="Jump to date"
-                />
+                <button type="button" className="ghost nav-arrow-btn" onClick={handleNextPeriod} title={t('nextPeriod')}>▶</button>
+                <button type="button" className="ghost today-pill-btn" onClick={handleToday}>{t('today')}</button>
+                <input type="date" value={anchorDate} onChange={(e) => setAnchorDate(e.target.value)} className="date-direct-picker" title={t('jumpToDate')} />
               </>
             ) : (
               <div className="timeframe-period-badge">
                 <span className="period-icon">🌐</span>
-                <strong>All Recorded Transactions</strong>
+                <strong>{t('allRecorded')}</strong>
               </div>
             )}
           </div>
         </div>
       </section>
 
-      {/* Visual Charts: Bar Chart for Categories & Line Graph for Trends */}
+      {/* Charts */}
       <section className="grid two-col charts-section">
         <div className="panel chart-panel">
           <div className="panel-header">
             <div>
-              <h2>Spend by Category</h2>
+              <h2>{t('spendByCategory')}</h2>
               <span className="panel-subtitle">
-                {chartTimeframe === 'all'
-                  ? 'All-time category distribution'
-                  : `Expenses for ${chartData.periodLabel}`}
+                {chartTimeframe === 'all' ? t('allTimeCategoryDist') : t('expensesFor', { period: chartData.periodLabel })}
               </span>
             </div>
             <span className="chart-badge">
@@ -737,38 +714,25 @@ function App() {
           </div>
           <CategoryBarChart data={chartData.categoryTotals} />
         </div>
-
         <div className="panel chart-panel">
           <div className="panel-header">
             <div>
               <h2>
-                {chartTimeframe === 'day'
-                  ? 'Daily Trajectory (7 Days)'
-                  : chartTimeframe === 'week'
-                  ? 'Weekly Daily Trend'
-                  : chartTimeframe === 'month'
-                  ? 'Monthly Trend (Past 6 Months)'
-                  : 'Historical Monthly Trend'}
+                {chartTimeframe === 'day' ? t('dailyTrajectory')
+                  : chartTimeframe === 'week' ? t('weeklyDailyTrend')
+                  : chartTimeframe === 'month' ? t('monthlyTrend')
+                  : t('historicalTrend')}
               </h2>
               <span className="panel-subtitle">
-                {chartTimeframe === 'day'
-                  ? `Day-by-day trend up to ${anchorDate}`
-                  : chartTimeframe === 'week'
-                  ? `Daily spending across ${chartData.periodLabel}`
-                  : chartTimeframe === 'month'
-                  ? 'Recent monthly timeline'
-                  : 'Macro timeline across all recorded months'}
+                {chartTimeframe === 'day' ? t('dayByDay', { date: anchorDate })
+                  : chartTimeframe === 'week' ? t('dailySpendingAcross', { period: chartData.periodLabel })
+                  : chartTimeframe === 'month' ? t('recentMonthly')
+                  : t('macroTimeline')}
               </span>
             </div>
-            <span className="chart-badge">
-              {chartData.trendUnit === 'day' ? 'Daily' : 'Monthly'}
-            </span>
+            <span className="chart-badge">{chartData.trendUnit === 'day' ? t('daily') : t('monthly')}</span>
           </div>
-          <MonthlyLineChart
-            data={chartData.trendMap}
-            unit={chartData.trendUnit}
-            emptyMessage={`No spending recorded for this ${chartTimeframe}`}
-          />
+          <MonthlyLineChart data={chartData.trendMap} unit={chartData.trendUnit} emptyMessage={`No spending recorded for this ${chartTimeframe}`} />
         </div>
       </section>
 
@@ -776,207 +740,48 @@ function App() {
       <section className="panel filter-panel">
         <div className="filter-controls-header">
           <div className="filter-title-wrap">
-            <h2>Transactions Explorer</h2>
+            <h2>{t('transactionsExplorer')}</h2>
             <span className="panel-subtitle">
               {filterTransactionsByChart && chartTimeframe !== 'all'
-                ? `Filtered to active ${chartTimeframe}: ${chartData.periodLabel}`
-                : 'All transactions across all time'}
+                ? t('filteredToActive', { timeframe: t(chartTimeframe), period: chartData.periodLabel })
+                : t('allTransactions')}
             </span>
           </div>
           <div className="filter-inputs-row">
             <div className="search-input-wrap">
-              <input
-                type="text"
-                placeholder="Search merchant, category, note…"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="search-input"
-              />
+              <input type="text" placeholder={t('searchPlaceholder')} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="search-input" />
             </div>
             <div className="filter-quick-buttons">
-              <button
-                type="button"
-                className={`ghost pill-btn ${filterTransactionsByChart ? 'active' : ''}`}
-                onClick={() => setFilterTransactionsByChart(!filterTransactionsByChart)}
-                title="Toggle filtering table by chart timeframe"
-              >
-                {filterTransactionsByChart ? `Filtered to ${chartTimeframe}` : 'Showing All Time'}
+              <button type="button" className={`ghost pill-btn ${filterTransactionsByChart ? 'active' : ''}`} onClick={() => setFilterTransactionsByChart(!filterTransactionsByChart)}>
+                {filterTransactionsByChart ? t('filteredTo', { timeframe: t(chartTimeframe === 'all' ? 'allTime' : chartTimeframe) }) : t('showingAllTime')}
               </button>
             </div>
           </div>
         </div>
         <div className="week-summary-card">
-          <span className="summary-pill">{filteredSpendRows.length} {filteredSpendRows.length === 1 ? 'transaction' : 'transactions'}</span>
+          <span className="summary-pill">{filteredSpendRows.length} {filteredSpendRows.length === 1 ? t('transaction') : t('transactions')}</span>
           <span className="summary-amount">${filteredSpendTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
         </div>
       </section>
 
-      {/* Forms & AI Section */}
-      <section className="grid three-col">
-        <form className="panel form-panel" onSubmit={addSpend}>
-          <div className="panel-header">
-            <h2>{editingSpendId ? 'Edit Spend Row' : 'Add Spend Row'}</h2>
-          </div>
-          <label className="input-group">
-            <span className="input-label">Date</span>
-            <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required />
-          </label>
-          <label className="input-group">
-            <span className="input-label">Amount ($)</span>
-            <input type="number" step="0.01" placeholder="0.00" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
-          </label>
-          <label className="input-group">
-            <span className="input-label">Category</span>
-            <input placeholder="e.g. Groceries, Housing, Dining" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} required />
-          </label>
-          <label className="input-group">
-            <span className="input-label">Merchant</span>
-            <input placeholder="e.g. Trader Joe's, Uber" value={form.merchant} onChange={(e) => setForm({ ...form, merchant: e.target.value })} />
-          </label>
-          <label className="input-group">
-            <span className="input-label">Notes</span>
-            <input placeholder="Optional memo" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
-          </label>
-          <div className="form-actions-row">
-            <button type="submit" className="primary-btn">{editingSpendId ? 'Update spend' : 'Save spend'}</button>
-            {editingSpendId && <button type="button" className="ghost" onClick={resetSpendForm}>Cancel</button>}
-          </div>
-        </form>
-
-        <form className="panel form-panel" onSubmit={saveRecurring}>
-          <div className="panel-header">
-            <h2>{editingRecurringId ? 'Edit Recurring' : 'Recurring Expenses'}</h2>
-          </div>
-          <label className="input-group">
-            <span className="input-label">Name</span>
-            <input placeholder="e.g. Netflix, Gym, Rent" value={recurringForm.name} onChange={(e) => setRecurringForm({ ...recurringForm, name: e.target.value })} required />
-          </label>
-          <label className="input-group">
-            <span className="input-label">Category</span>
-            <input placeholder="e.g. Utilities, Entertainment" value={recurringForm.category} onChange={(e) => setRecurringForm({ ...recurringForm, category: e.target.value })} required />
-          </label>
-          <label className="input-group">
-            <span className="input-label">Amount ($)</span>
-            <input type="number" step="0.01" placeholder="0.00" value={recurringForm.amount} onChange={(e) => setRecurringForm({ ...recurringForm, amount: e.target.value })} required />
-          </label>
-          <label className="input-group">
-            <span className="input-label">Frequency</span>
-            <select value={recurringForm.frequency} onChange={(e) => setRecurringForm({ ...recurringForm, frequency: e.target.value })}>
-              <option value="monthly">Monthly</option>
-              <option value="weekly">Weekly</option>
-              <option value="quarterly">Quarterly</option>
-              <option value="yearly">Yearly</option>
-            </select>
-          </label>
-          <label className="input-group">
-            <span className="input-label">Next Due Date</span>
-            <input type="date" value={recurringForm.next_due_date} onChange={(e) => setRecurringForm({ ...recurringForm, next_due_date: e.target.value })} required />
-          </label>
-          <label className="input-group">
-            <span className="input-label">Notes</span>
-            <textarea placeholder="Notes / details" value={recurringForm.notes} onChange={(e) => setRecurringForm({ ...recurringForm, notes: e.target.value })} rows="2" />
-          </label>
-          <div className="form-actions-row">
-            <button type="submit" className="primary-btn">{editingRecurringId ? 'Update recurring' : 'Save recurring'}</button>
-            {editingRecurringId && <button type="button" className="ghost" onClick={resetRecurringForm}>Cancel</button>}
-          </div>
-        </form>
-
-        <div className="panel form-panel ai-panel">
-          <div className="panel-header">
-            <div className="ai-title-wrap">
-              <span className="sparkle-icon">✨</span>
-              <h2>Gemini Receipt AI</h2>
-            </div>
-            {!apiKeyStatus.has_gemini_api_key && (
-              <button
-                type="button"
-                className="api-key-btn missing"
-                onClick={() => setApiKeyModalOpen(true)}
-                style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem' }}
-              >
-                <span className="api-key-dot" />
-                <span>API Key Needed</span>
-              </button>
-            )}
-          </div>
-          {!apiKeyStatus.has_gemini_api_key && (
-            <div
-              className="api-key-status-banner missing"
-              style={{ marginBottom: '1rem', cursor: 'pointer', display: 'flex', justifyContent: 'space-between' }}
-              onClick={() => setApiKeyModalOpen(true)}
-            >
-              <span>⚠️ Gemini API Key not set. Click here to configure your key.</span>
-              <strong style={{ textDecoration: 'underline' }}>Configure ↗</strong>
-            </div>
-          )}
-          <label className="input-group">
-            <span className="input-label">Date Override (Optional)</span>
-            <input
-              type="month"
-              value={receiptMonth}
-              onChange={(e) => setReceiptMonth(e.target.value)}
-              placeholder="Auto-detect from receipt"
-            />
-            <span className="input-hint">Leave blank to auto-detect the date from the receipt (falls back to today if unreadable)</span>
-          </label>
-          <label className="input-group file-upload-group">
-            <span className="input-label">Receipt Image</span>
-            <input type="file" accept="image/*" onChange={(e) => setReceiptFile(e.target.files?.[0])} />
-          </label>
-          <label className="input-group">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-              <span className="input-label">Extraction Prompt</span>
-              <button
-                type="button"
-                onClick={() => setReceiptPrompt(DEFAULT_RECEIPT_PROMPT)}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: '#38bdf8',
-                  fontSize: '0.75rem',
-                  cursor: 'pointer',
-                  padding: '2px 6px',
-                }}
-              >
-                ↺ Reset Prompt
-              </button>
-            </div>
-            <textarea value={receiptPrompt} rows="4" onChange={(e) => setReceiptPrompt(e.target.value)} />
-          </label>
-          <div className="receipt-actions">
-            <button onClick={analyzeReceipt} disabled={analyzingReceipt} className="ai-btn">
-              {analyzingReceipt ? '✨ Scanning & Analyzing…' : '✨ Analyze Receipt Image'}
-            </button>
-            {analyzingReceipt && <div className="message ai-status">Processing receipt with Gemini Multimodal AI…</div>}
-          </div>
-          {receiptResult && <ReceiptResultView result={receiptResult} />}
-        </div>
-      </section>
-
-      {/* Spend Rows and Recurring Expenses Tables */}
+      {/* Transactions & Recurring Lists */}
       <section className="grid two-col">
         <div className="panel data-panel">
           <div className="panel-header">
-            <h2>Transactions</h2>
-            <span className="record-count">{filteredSpendRows.length} entries</span>
+            <h2>{t('transactionsTitle')}</h2>
+            <span className="record-count">{filteredSpendRows.length} {t('entries')}</span>
           </div>
           {filteredSpendRows.length === 0 ? (
-            <div className="empty-data-state">
-              <span>🧾</span>
-              <p>No spend rows match your criteria</p>
-            </div>
+            <div className="empty-data-state"><span>🧾</span><p>{t('noSpend')}</p></div>
           ) : (
             <ul className="rows-list slim-list">
               {filteredSpendRows.map((item) => (
                 <li key={item.id} className="transaction-row">
                   <div className="transaction-main">
                     <div className="transaction-line1">
-                      <strong className="merchant-name">{item.merchant || 'Unknown Merchant'}</strong>
-                      <span className="category-pill">{item.category}</span>
-                      {item.source === 'receipt_ai' && (
-                        <span className="ai-pill" title="Imported by Gemini AI">✨ AI</span>
-                      )}
+                      <strong className="merchant-name">{item.merchant || t('unknownMerchant')}</strong>
+                      <span className="category-pill">{displayCategory(item.category)}</span>
+                      {item.source === 'receipt_ai' && <span className="ai-pill" title="Imported by Gemini AI">{t('ai')}</span>}
                     </div>
                     <div className="transaction-line2">
                       <span className="transaction-date">{item.date}</span>
@@ -988,8 +793,8 @@ function App() {
                       ${Number(item.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </strong>
                     <div className="actions">
-                      <button className="ghost sm-btn" onClick={() => editSpend(item)}>Edit</button>
-                      <button className="ghost sm-btn danger-hover" onClick={() => deleteSpend(item.id)}>Delete</button>
+                      <button className="ghost sm-btn" onClick={() => editSpend(item)}>{t('edit')}</button>
+                      <button className="ghost sm-btn danger-hover" onClick={() => deleteSpend(item.id)}>{t('delete')}</button>
                     </div>
                   </div>
                 </li>
@@ -1000,14 +805,11 @@ function App() {
 
         <div className="panel data-panel">
           <div className="panel-header">
-            <h2>Recurring Expenses</h2>
-            <span className="record-count">{recurring.length} subscriptions</span>
+            <h2>{t('recurringExpenses')}</h2>
+            <span className="record-count">{t('subscriptionsCount', { count: recurring.length })}</span>
           </div>
           {recurring.length === 0 ? (
-            <div className="empty-data-state">
-              <span>🔄</span>
-              <p>No recurring expenses registered</p>
-            </div>
+            <div className="empty-data-state"><span>🔄</span><p>{t('noRecurring')}</p></div>
           ) : (
             <ul className="rows-list">
               {recurring.map((item) => (
@@ -1015,11 +817,11 @@ function App() {
                   <div className="recurring-main">
                     <div className="recurring-line1">
                       <strong className="recurring-name">{item.name}</strong>
-                      <span className="frequency-badge">{item.frequency}</span>
+                      <span className="frequency-badge">{item.frequency === 'monthly' ? t('freqMonthly') : item.frequency === 'weekly' ? t('freqWeekly') : item.frequency === 'quarterly' ? t('freqQuarterly') : t('freqYearly')}</span>
                     </div>
                     <div className="recurring-line2">
-                      <span className="recurring-cat">{item.category}</span>
-                      <span className="recurring-due">Due: {item.next_due_date}</span>
+                      <span className="recurring-cat">{displayCategory(item.category)}</span>
+                      <span className="recurring-due">{t('due', { date: item.next_due_date })}</span>
                     </div>
                   </div>
                   <div className="recurring-right">
@@ -1027,8 +829,8 @@ function App() {
                       ${Number(item.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </strong>
                     <div className="actions">
-                      <button className="ghost sm-btn" onClick={() => editRecurring(item)}>Edit</button>
-                      <button className="ghost sm-btn danger-hover" onClick={() => deleteRecurring(item.id)}>Delete</button>
+                      <button className="ghost sm-btn" onClick={() => editRecurring(item)}>{t('edit')}</button>
+                      <button className="ghost sm-btn danger-hover" onClick={() => deleteRecurring(item.id)}>{t('delete')}</button>
                     </div>
                   </div>
                 </li>
@@ -1038,11 +840,63 @@ function App() {
         </div>
       </section>
 
+      {/* Collapsible: Recurring Expenses Form — at the very bottom */}
+      <section className="collapsible-wrapper bottom-section">
+        <CollapsibleSection
+          title={editingRecurringId ? t('editRecurring') : t('addRecurring')}
+          icon="🔄"
+          defaultOpen={!!editingRecurringId}
+        >
+          <form className="collapsible-form" onSubmit={saveRecurring}>
+            <div className="form-grid">
+              <label className="input-group">
+                <span className="input-label">{t('name')}</span>
+                <input placeholder={t('namePlaceholder')} value={recurringForm.name} onChange={(e) => setRecurringForm({ ...recurringForm, name: e.target.value })} required />
+              </label>
+              <label className="input-group">
+                <span className="input-label">{t('category')}</span>
+                <select value={recurringForm.category} onChange={(e) => setRecurringForm({ ...recurringForm, category: e.target.value })} required>
+                  {categoryOptions.map(opt => (
+                    <option key={opt.key} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="input-group">
+                <span className="input-label">{t('amount')}</span>
+                <input type="number" step="0.01" placeholder="0.00" value={recurringForm.amount} onChange={(e) => setRecurringForm({ ...recurringForm, amount: e.target.value })} required />
+              </label>
+              <label className="input-group">
+                <span className="input-label">{t('frequency')}</span>
+                <select value={recurringForm.frequency} onChange={(e) => setRecurringForm({ ...recurringForm, frequency: e.target.value })}>
+                  <option value="monthly">{t('freqMonthly')}</option>
+                  <option value="weekly">{t('freqWeekly')}</option>
+                  <option value="quarterly">{t('freqQuarterly')}</option>
+                  <option value="yearly">{t('freqYearly')}</option>
+                </select>
+              </label>
+              <label className="input-group">
+                <span className="input-label">{t('nextDueDate')}</span>
+                <input type="date" value={recurringForm.next_due_date} onChange={(e) => setRecurringForm({ ...recurringForm, next_due_date: e.target.value })} required />
+              </label>
+              <label className="input-group">
+                <span className="input-label">{t('notes')}</span>
+                <textarea placeholder={t('notesDetails')} value={recurringForm.notes} onChange={(e) => setRecurringForm({ ...recurringForm, notes: e.target.value })} rows="2" />
+              </label>
+            </div>
+            <div className="form-actions-row">
+              <button type="submit" className="primary-btn">{editingRecurringId ? t('updateRecurringBtn') : t('saveRecurring')}</button>
+              {editingRecurringId && <button type="button" className="ghost" onClick={resetRecurringForm}>{t('cancel')}</button>}
+            </div>
+          </form>
+        </CollapsibleSection>
+      </section>
+
+      {/* API Key Modal */}
       {apiKeyModalOpen && (
         <div className="modal-backdrop" onClick={() => setApiKeyModalOpen(false)}>
           <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>🔑 Gemini API Key</h3>
+              <h3>{t('geminiApiKey')}</h3>
               <button type="button" className="modal-close" onClick={() => setApiKeyModalOpen(false)}>×</button>
             </div>
             <div className="modal-body">
@@ -1050,59 +904,27 @@ function App() {
                 <span>{apiKeyStatus.has_gemini_api_key ? '✓' : '⚠️'}</span>
                 <span>
                   {apiKeyStatus.has_gemini_api_key
-                    ? `Configured key: ${apiKeyStatus.gemini_api_key_masked || 'Active'}`
-                    : 'No API key configured. Enter a Gemini key below to enable receipt scanning.'}
+                    ? t('configuredKey', { key: apiKeyStatus.gemini_api_key_masked || 'Active' })
+                    : t('noApiKey')}
                 </span>
               </div>
-              <p>
-                Provide your Google Gemini API key to enable OCR and expense categorization via Gemini 3.5 Flash.
-              </p>
+              <p>{t('geminiDesc')}</p>
               <form onSubmit={saveApiKey} style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
                 <label className="input-group">
-                  <span className="input-label">Gemini API Key</span>
+                  <span className="input-label">{t('geminiKeyLabel')}</span>
                   <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                    <input
-                      type={showApiKeyText ? 'text' : 'password'}
-                      value={apiKeyInput}
-                      onChange={(e) => setApiKeyInput(e.target.value)}
-                      placeholder="AIzaSy..."
-                      required
-                      style={{ width: '100%', paddingRight: '4rem' }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowApiKeyText(!showApiKeyText)}
-                      style={{
-                        position: 'absolute',
-                        right: '8px',
-                        background: 'transparent',
-                        border: 'none',
-                        color: '#94a3b8',
-                        fontSize: '0.75rem',
-                        cursor: 'pointer',
-                        padding: '4px 6px',
-                      }}
-                    >
-                      {showApiKeyText ? 'Hide' : 'Show'}
+                    <input type={showApiKeyText ? 'text' : 'password'} value={apiKeyInput} onChange={(e) => setApiKeyInput(e.target.value)} placeholder="AIzaSy..." required style={{ width: '100%', paddingRight: '4rem' }} />
+                    <button type="button" onClick={() => setShowApiKeyText(!showApiKeyText)}
+                      style={{ position: 'absolute', right: '8px', background: 'transparent', border: 'none', color: '#94a3b8', fontSize: '0.75rem', cursor: 'pointer', padding: '4px 6px' }}>
+                      {showApiKeyText ? t('hide') : t('show')}
                     </button>
                   </div>
                 </label>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.25rem' }}>
-                  <a
-                    href="https://aistudio.google.com/app/apikey"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="api-key-link"
-                  >
-                    Get free Gemini API key ↗
-                  </a>
+                  <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="api-key-link">{t('getKey')}</a>
                   <div className="modal-actions">
-                    <button type="button" className="ghost" onClick={() => setApiKeyModalOpen(false)}>
-                      Cancel
-                    </button>
-                    <button type="submit" className="primary-btn" disabled={savingApiKey}>
-                      {savingApiKey ? 'Saving…' : 'Save Key'}
-                    </button>
+                    <button type="button" className="ghost" onClick={() => setApiKeyModalOpen(false)}>{t('cancel')}</button>
+                    <button type="submit" className="primary-btn" disabled={savingApiKey}>{savingApiKey ? t('saving') : t('saveKey')}</button>
                   </div>
                 </div>
               </form>

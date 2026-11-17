@@ -58,7 +58,7 @@ Your task is to analyze the provided receipt or invoice image and extract struct
    - "total_price": Final line item charge as float (e.g. 4.00).
    - "category": Select the single most accurate budget category from:
      * "Groceries"
-     * "Dining & Food"
+     * "Dining Out"
      * "Alcohol & Drinks"
      * "Housing"
      * "Utilities"
@@ -67,6 +67,13 @@ Your task is to analyze the provided receipt or invoice image and extract struct
      * "Entertainment"
      * "Healthcare"
      * "Personal Care"
+     * "Furniture"
+     * "Luxury"
+     * "Education"
+     * "Travel"
+     * "Subscriptions"
+     * "Insurance"
+     * "Gifts & Donations"
      * "Discounts & Adjustments"
      * "Other"
 
